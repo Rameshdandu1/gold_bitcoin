@@ -1,0 +1,86 @@
+# DESIGN.md — Dual AI Market Intelligence Architecture
+
+**Status**: Design v0.1 / research MVP. **Scope**: analysis and alerts only. **Deployment**: native Windows Server 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker optional, not required for this starter.
+
+## Business purpose
+Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.
+
+## System boundaries and sequence
+
+```mermaid
+flowchart TD
+    D[Delta Public WS + REST] --> N[Normalizer, Time and Symbol Validation]
+    C[CoinGlass V4 REST (optional)] --> N
+    M[Optional XAU/USD + Macro Feed] --> N
+    N --> Q[Durable Raw Event Storage & Quality Monitor]
+    Q --> F[Closed-candle Features, Structure, ATR, Volume & Liquidity]
+    F --> E[6 Independent Horizon Engines]
+    E --> S[Canonical Immutable Snapshot + Candidate]
+    S --> G[GPT Analyst]
+    S --> A[Claude Analyst]
+    G --> V[Schema / Freshness Validation]
+    A --> V
+    V --> K[Deterministic Consensus + Risk Gate]
+    K --> H[Audit Database and Results]
+    H --> U[Authenticated Dashboard]
+    H --> T[Telegram / Email Alert Workers]
+```
+
+### Adapters
+- `DeltaREST`: `/v2/products` (symbol discovery), `/v2/history/candles` (historical closed candles). REST snapshots are rate-limited and are **not** historical raw trades.
+- `DeltaWS`: `wss://public-socket.india.delta.exchange`, `trades`, `ticker`, `ob_l2`, optional `ob_updates`, `candlestick_*`. Must detect partial messages, reconnect, sequence/checksum when using `ob_updates`. MVP WS stores a bounded trade window and latest book snapshot; exact raw-event persistence / book replay is a next milestone.
+- `CoinGlass V4`: `https://open-api-v4.coinglass.com`, `CG-API-KEY`. Feature gating by actual subscription and supported exchanges/pairs. Start with supported-coins discovery and OI/funding; liquidation map endpoints are Professional entitlement, not assumed. Cache/rate limit; commercial use requires an eligible license.
+- `ReferenceGold`: optional XAU/USD, DXY, yields, economic calendar with provider attribution and time stamp. If missing, report unknown rather than silently treating XAUT as spot gold.
+
+### Core domain models
+`MarketEvent`, `Candle`, `Instrument`, `FeatureSnapshot`, `Candidate`, `AnalystAssessment`, `ConsensusDecision`, `Alert`, `Outcome` are versioned. Use UTC timestamp in payload, decimal handling of prices, explicit unit/currency, exchange and source. Snapshot hash is immutable and sent to both AI models.
+
+### Six engines, independent policy
+| Engine | Base candles |  Context | Forecast | Trigger family | Raw targets |
+|---|---|---|---|---|---|
+| GOLD_FAST | 1m | 5m | 30m | Sweep/reclaim, breakout pressure | $10/$20/$30 |
+| GOLD_HOURLY | 5m | 15m/1h | 60m | Breakout/retest, structure | $10/$20/$30 |
+| GOLD_SESSION | 15m | 1h/4h | 240m | Session range/major BOS | $10/$20/$30 |
+| BTC_FAST | 1m | 5m | 30m | Aggression/vol expansion | 0.25/0.5/0.75% initial candidate values |
+| BTC_HOURLY | 5m | 15m/1h | 60m | Retest/OI/flow | 0.25/0.5/0.75% |
+| BTC_SESSION | 15m | 1h/4h | 240m | Larger structure/macro | 0.25/0.5/0.75% |
+
+Target tiers and ATR projection filters are **provisional heuristics**, not learned success odds. Do not publish a live CONFIRMED call without complete quality, AI and risk gates. The MVP implements a simpler closed-candle breakout candidate; these candidates are explicitly `INCOMPLETE` and must **not** be confirmed or sent to paid AI review until live flow, source-quality and risk gates exist. Specialized sweep, derivatives and macro logic are explicit later milestones.
+
+### Trade signal pipeline
+1. Produce a candidate only on a newly **closed** candle, after enough clean historical bars. Stable ID from `symbol|horizon|candle_close|direction|rule_version`.
+2. Calculate ATR(14), range/structure levels and volatility budget. Evidence includes source freshness and numerical features. Candidate targets/stop computed by code, never AI.
+3. Freeze canonical snapshot + hash. Two independent API calls receive identical snapshot; no cross-peeking, ideally `asyncio.gather` with individual deadlines.
+4. Strict parse; require echoed snapshot ID, direction, supported target intersection; default `WAIT` for refusals, malformed, latency, budget, or API failure.
+5. Risk gate: positive entry/stop distances; reward/risk threshold; current price/timestamp freshness; legal/operational source entitlements; no disabled periods; duplicate suppression. `CONFIRMED` is merely an **alert**, NOT an instruction to buy options.
+6. Record initial decision, revisions, expiry and outcome separately. Never overwrite history. Alerts are deduplicated and include reason + invalidation + timestamp.
+
+### Volatility and performance
+ATR is a scale, not a directional prediction. Naive `ATR * sqrt(horizon / bar_minutes)` is a loose heuristic, not a forecast. Intraday sessions/news cause regime changes. Need walk-forward and purged time-based holdout, bootstrap CIs by day, fees/slippage, and target-before-stop labelling; ambiguous same-bar high/low = conservative loss or separate ambiguous bucket, not automatic win.
+
+### Storage and messaging roadmap
+- **Starter**: SQLite WAL for audit/demo (single host), in-process scheduler/worker, capped rolling WS buffers. This is not a durable tick database.
+- **Production target**: PostgreSQL + TimescaleDB (Windows native PostgreSQL or optional isolated Linux VM), durable raw events and candle tables; queue via PostgreSQL outbox or Redis in a supported Linux VM. Do NOT rely on discontinued native Windows Redis ports. Migrate only after measured feed throughput.
+- Retention policies: raw order-book updates may grow quickly; sample or compress according to license and analytical requirements. Backups: nightly database + off-host restore test.
+
+### Security
+Windows service identity with least privileges; API listens on 127.0.0.1 behind authenticated HTTPS reverse proxy; no broad CORS; environment secrets not committed; audit access and rotation; `TRADING_ENABLED=false` permanently in this MVP. Record minimal safe diagnostics. Exchange data, retrieved news and LLM output are untrusted.
+
+### Options follow-up (not implemented in MVP)
+Discover active option products, strikes/expiries, full bid/ask, IV/Greeks; independently compute delta exposure, decay, expected value and worst-case spread/slippage. Validate premium economics before ranking CALL/PUT instruments. Distinguish underlying signal from options order.
+
+### Operator-visible dashboard
+Six-card grid, data freshness/status per market, source provenance, dual-provider verdicts, disagreements and spend, candidate lifecycle, historical performance (sample size), options page (after Phase 3), system health. Show `WAIT` by default. UI never invents live market data.
+
+### Operational SLOs (targets not claims)
+- WS reconnect with exponential jitter and observability; stale trades/book invalidated.
+- Data freshness configurable per feed; alert decision must be based on matching snapshot and unexpired candidate.
+- Recovery after Windows service restart without duplicate alerts.
+- CI static checks + unit tests, nightly replay tests before live rollout.
+
+### References (review quarterly)
+- Delta India: https://docs.delta.exchange/
+- CoinGlass V4: https://docs.coinglass.com/reference/getting-started-with-your-api
+- CoinGlass permissions: https://docs.coinglass.com/reference/plans-and-permissions
+- OpenAI structured output: https://developers.openai.com/api/docs/guides/structured-outputs
+- Anthropic structured output: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
