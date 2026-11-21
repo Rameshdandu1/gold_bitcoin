@@ -10,6 +10,7 @@ from marketintel.ai import (
     GPTAnalyst,
     TransportReply,
     independent_review_v2,
+    provider_request_bytes,
 )
 from marketintel.analysis import build_analysis_envelope
 from marketintel.config import Settings
@@ -138,7 +139,10 @@ async def test_both_providers_receive_same_bytes_and_execute_concurrently():
     )
 
     assert gpt_result.status == claude_result.status == "SUCCEEDED"
-    assert openai_transport.inputs == anthropic_transport.inputs == [analysis.canonical_bytes]
+    assert (
+        openai_transport.inputs == anthropic_transport.inputs == [provider_request_bytes(analysis)]
+    )
+    assert analysis.canonical_bytes in openai_transport.inputs[0]
     assert gpt_result.provider == "OPENAI"
     assert claude_result.provider == "ANTHROPIC"
     assert gpt_result.returned_model == "fixture-openai-2026-11-21"

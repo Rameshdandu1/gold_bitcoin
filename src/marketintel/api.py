@@ -33,8 +33,8 @@ def _authorized(request: Request, settings: Settings) -> bool:
         username, password = decoded.split(":", 1)
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return False
-    return secrets.compare_digest(username, expected_user) and secrets.compare_digest(
-        password, expected_password
+    return secrets.compare_digest(username.encode("utf-8"), expected_user.encode("utf-8")) and (
+        secrets.compare_digest(password.encode("utf-8"), expected_password.encode("utf-8"))
     )
 
 

@@ -104,6 +104,12 @@ async def test_worker_reconciles_closed_trade_candle_and_persists_valid_status(
     open_time = now.replace(second=0, microsecond=0) - timedelta(minutes=2)
     event = trade_event(open_time + timedelta(seconds=5))
     store = Store(tmp_path / "market.sqlite3")
+    store.record_source_status(
+        "delta_websocket",
+        "CONNECTED",
+        "TEST_FIXTURE_NOT_LIVE",
+        occurred_at=open_time - timedelta(seconds=1),
+    )
     store.append_raw_event(event)
     candle = Candle(
         symbol="BTCUSD",

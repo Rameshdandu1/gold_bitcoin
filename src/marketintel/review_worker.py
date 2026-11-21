@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from marketintel.ai import ClaudeAnalyst, GPTAnalyst
@@ -14,28 +15,10 @@ from marketintel.config import Settings
 from marketintel.consensus import decide_v2
 from marketintel.orchestration import ReviewOrchestrator
 from marketintel.replay import replay_trade_records
-from marketintel.review import EligibilitySnapshot
+from marketintel.review import AnalystAssessmentV2, EligibilitySnapshot, ProviderResult, TokenUsage
 from marketintel.storage import Store
 
 LOGGER = logging.getLogger(__name__)
-
-
-def _current_source(
-    store: Store,
-    source: str,
-    *,
-    now: datetime,
-    accepted_states: set[str],
-    maximum_age_seconds: float,
-) -> bool:
-    health = store.source_health(source)
-    if health is None or health["state"] not in accepted_states:
-        return False
-    timestamp = health["last_success_at_utc"] or health["heartbeat_at_utc"]
-    if not timestamp:
-        return False
-    age = (now - datetime.fromisoformat(timestamp)).total_seconds()
-    return 0 <= age <= maximum_age_seconds
 
 
 def current_eligibility(
@@ -47,13 +30,15 @@ def current_eligibility(
 ) -> EligibilitySnapshot:
     """Build fresh server-owned gates from durable market facts after both reviews."""
     envelope = analysis.envelope
-    events = store.raw_events(
+    snapshot = store.eligibility_snapshot_data(
+        envelope.candidate_id,
         symbol=envelope.symbol,
-        channels=("trades",),
-        start=envelope.observed_at_utc,
-        end=now + timedelta(microseconds=1),
-        received_end=now,
+        observed_at=envelope.observed_at_utc,
+        through=now,
     )
+    if snapshot is None:
+        raise ValueError("Candidate has no active revision eligibility identity")
+    token, evidence, events, book = snapshot
     trades = replay_trade_records(events, symbol=envelope.symbol, through=now)
     latest = max(trades, key=lambda item: (item.received_at_utc, item.event_id), default=None)
     stop = Decimal(envelope.invalidation)
@@ -79,7 +64,6 @@ def current_eligibility(
     }
     crossed = tuple(sorted({index for trade in trades for index in target_hits(trade.price)}))
 
-    book = store.book_checkpoint(envelope.symbol)
     top = book.top_of_book(now=now) if book is not None else None
     book_time = (
         book.last_event_time_utc
@@ -87,21 +71,29 @@ def current_eligibility(
         else envelope.observed_at_utc
     )
     bid, ask = top or (Decimal(envelope.entry), Decimal(envelope.entry))
-    token_result = store.eligibility_token(envelope.candidate_id)
-    if token_result is None:
-        raise ValueError("Candidate has no active revision eligibility identity")
-    token, evidence = token_result
     lifecycle = evidence["lifecycle"]
     lifecycle_state = lifecycle[1] if lifecycle else "INVALIDATED"
     latest_time = latest.received_at_utc if latest else envelope.observed_at_utc
     latest_price = latest.price if latest else Decimal(envelope.entry)
-    websocket = store.source_health("delta_websocket")
+    health = {row[0]: row[1:] for row in evidence["source_health"]}
+    websocket = health.get("delta_websocket")
     trade_is_current = (
         latest is not None
         and 0 <= (now - latest.received_at_utc).total_seconds() <= settings.data_max_age_seconds
         and websocket is not None
-        and websocket["state"] == "CONNECTED"
+        and websocket[0] == "CONNECTED"
     )
+
+    def source_current(source: str, accepted: set[str], maximum_age: float) -> bool:
+        row = health.get(source)
+        if row is None or row[0] not in accepted:
+            return False
+        timestamp = row[2] or row[1]
+        if not timestamp:
+            return False
+        age = (now - datetime.fromisoformat(timestamp)).total_seconds()
+        return 0 <= age <= maximum_age
+
     return EligibilitySnapshot(
         candidate_id=envelope.candidate_id,
         candidate_revision_id=str(evidence["revision_id"]),
@@ -114,19 +106,15 @@ def current_eligibility(
         best_bid=canonical_decimal(bid),
         best_ask=canonical_decimal(ask),
         book_observed_at_utc=book_time,
-        discovery_current=_current_source(
-            store,
+        discovery_current=source_current(
             f"product_discovery:{envelope.asset}",
-            now=now,
-            accepted_states={"AVAILABLE"},
-            maximum_age_seconds=settings.delta_discovery_max_age_seconds,
+            {"AVAILABLE"},
+            settings.delta_discovery_max_age_seconds,
         ),
-        reconciliation_current=_current_source(
-            store,
+        reconciliation_current=source_current(
             f"candle_reconciliation:{envelope.symbol}",
-            now=now,
-            accepted_states={"VALID"},
-            maximum_age_seconds=settings.delta_reconciliation_max_age_seconds,
+            {"VALID"},
+            settings.delta_reconciliation_max_age_seconds,
         ),
         trade_stream_current=trade_is_current,
         book_current=top is not None,
@@ -159,6 +147,53 @@ class ReviewWorker:
             self.claude,
         )
 
+    @staticmethod
+    def _stored_results(rows: list[dict]) -> tuple[ProviderResult, ProviderResult]:
+        latest = {
+            provider: max(
+                (row for row in rows if row["provider"] == provider),
+                key=lambda row: row["attempt_number"],
+            )
+            for provider in ("OPENAI", "ANTHROPIC")
+        }
+
+        def load(row: dict) -> ProviderResult:
+            return ProviderResult(
+                provider=row["provider"],
+                status=row["status"],
+                requested_model=row["requested_model"],
+                returned_model=row["returned_model"],
+                request_id=row["request_id"],
+                response_id=row["response_id"],
+                sdk_version=row["metadata"].get("sdk", "stored"),
+                started_at_utc=datetime.fromisoformat(row["started_at_utc"]),
+                completed_at_utc=datetime.fromisoformat(row["completed_at_utc"]),
+                latency_ms=max(
+                    0,
+                    round(
+                        (
+                            datetime.fromisoformat(row["completed_at_utc"])
+                            - datetime.fromisoformat(row["started_at_utc"])
+                        ).total_seconds()
+                        * 1_000
+                    ),
+                ),
+                attempt_number=row["attempt_number"],
+                finish_reason=row["finish_reason"],
+                usage=TokenUsage(
+                    input_tokens=row["input_tokens"], output_tokens=row["output_tokens"]
+                ),
+                failure_code=row["failure_code"],
+                assessment=(
+                    AnalystAssessmentV2.model_validate_json(json.dumps(row["assessment"]))
+                    if row["assessment"]
+                    else None
+                ),
+                safe_metadata=tuple(sorted(row["metadata"].items())),
+            )
+
+        return load(latest["OPENAI"]), load(latest["ANTHROPIC"])
+
     async def run_once(self, *, owner: str, now: datetime | None = None) -> bool:
         now = now or datetime.now(UTC)
         claim = self.store.claim_review_job(
@@ -190,11 +225,16 @@ class ReviewWorker:
             return True
         analysis = load_canonical_analysis(payload, run["envelope_digest"])
         try:
-            openai, anthropic = await self.orchestrator.execute(
-                analysis,
-                run_id=claim["run_id"],
-                claim=claim,
-            )
+            if claim.get("claimed_from_status") == "RESULTS_READY":
+                openai, anthropic = self._stored_results(
+                    self.store.provider_results(claim["run_id"])
+                )
+            else:
+                openai, anthropic = await self.orchestrator.execute(
+                    analysis,
+                    run_id=claim["run_id"],
+                    claim=claim,
+                )
             attempts = self.store.provider_results(claim["run_id"])
             attempt_ids = tuple(
                 max(
@@ -204,6 +244,7 @@ class ReviewWorker:
                 for provider in ("OPENAI", "ANTHROPIC")
             )
             evaluated_at = datetime.now(UTC)
+            deadline_at = datetime.fromisoformat(run["deadline_at_utc"])
             eligibility = current_eligibility(
                 self.store,
                 self.settings,
@@ -226,6 +267,11 @@ class ReviewWorker:
             committed = self.store.commit_consensus_decision_and_outbox(
                 decision,
                 destination_id=destination,
+                job_id=claim["job_id"],
+                lease_owner=owner,
+                lease_generation=claim["generation"],
+                deadline_at=deadline_at,
+                now=evaluated_at,
             )
             self.store.record_source_status(
                 "review_worker",

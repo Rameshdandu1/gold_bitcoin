@@ -8,7 +8,12 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from marketintel.ai import ClaudeAnalyst, GPTAnalyst, ProviderAdapter
+from marketintel.ai import (
+    ClaudeAnalyst,
+    GPTAnalyst,
+    ProviderAdapter,
+    provider_request_input_token_upper_bound,
+)
 from marketintel.analysis import CanonicalAnalysis
 from marketintel.config import Settings
 from marketintel.review import ProviderResult
@@ -54,13 +59,9 @@ class ReviewOrchestrator:
             return None
         return int(values[0]), int(values[1])
 
-    def _estimated_cost(self, rates: tuple[int, int]) -> int:
+    def _estimated_cost(self, rates: tuple[int, int], input_tokens: int) -> int:
         return math.ceil(
-            (
-                self.settings.ai_max_input_tokens * rates[0]
-                + self.settings.ai_max_output_tokens * rates[1]
-            )
-            / 1_000_000
+            (input_tokens * rates[0] + self.settings.ai_max_output_tokens * rates[1]) / 1_000_000
         )
 
     @staticmethod
@@ -112,6 +113,22 @@ class ReviewOrchestrator:
                 result=result,
             )
             return result
+        input_token_bound = provider_request_input_token_upper_bound(analysis)
+        if input_token_bound > self.settings.ai_max_input_tokens:
+            result = self._not_ready(
+                adapter,
+                attempt=1,
+                code="COMPLETE_REQUEST_INPUT_LIMIT_EXCEEDED",
+            )
+            self.store.save_provider_result(
+                run_id=run_id,
+                job_id=claim["job_id"],
+                owner=claim["owner"],
+                generation=claim["generation"],
+                dispatch_id=f"input-blocked-{adapter.provider.lower()}-{uuid.uuid4().hex}",
+                result=result,
+            )
+            return result
 
         last: ProviderResult | None = None
         for attempt in range(1, self.settings.ai_max_attempts_per_provider + 1):
@@ -132,13 +149,13 @@ class ReviewOrchestrator:
                     result=result,
                 )
                 return result
-            estimated = self._estimated_cost(rates)
+            estimated = self._estimated_cost(rates, input_token_bound)
             reservation = self.store.reserve_provider_budget(
                 run_id=run_id,
                 provider=adapter.provider,
                 attempt_number=attempt,
                 now=now,
-                input_tokens=self.settings.ai_max_input_tokens,
+                input_tokens=input_token_bound,
                 output_tokens=self.settings.ai_max_output_tokens,
                 cost_microusd=estimated,
                 provider_call_limit=self.settings.ai_provider_call_limit_per_day,
@@ -207,8 +224,16 @@ class ReviewOrchestrator:
             deadline_at = now
 
         configuration_failure: str | None = None
+        queued_models = run["provider_config"]
+        if (
+            queued_models.get("openai_model") != self.gpt.requested_model
+            or queued_models.get("anthropic_model") != self.claude.requested_model
+        ):
+            configuration_failure = "QUEUED_PROVIDER_CONFIGURATION_MISMATCH"
         if self.settings.ai_enabled:
-            if not all(
+            if configuration_failure is not None:
+                pass
+            elif not all(
                 (
                     self.gpt.api_key,
                     self.gpt.requested_model,
@@ -235,13 +260,13 @@ class ReviewOrchestrator:
                     dispatch_id=f"not-ready-{adapter.provider.lower()}-{uuid.uuid4().hex}",
                     result=result,
                 )
-            self.store.complete_review_job(
+            if not self.store.mark_review_results_ready(
                 claim["job_id"],
                 owner=claim["owner"],
                 generation=claim["generation"],
-                status="WAIT",
                 now=self.clock(),
-            )
+            ):
+                raise RuntimeError("Review lease was lost before results-ready persistence")
             return results[0], results[1]
 
         should_dispatch = (
@@ -279,11 +304,11 @@ class ReviewOrchestrator:
                 deadline_at=deadline_at,
             ),
         )
-        self.store.complete_review_job(
+        if not self.store.mark_review_results_ready(
             claim["job_id"],
             owner=claim["owner"],
             generation=claim["generation"],
-            status="COMPLETED",
             now=self.clock(),
-        )
+        ):
+            raise RuntimeError("Review lease was lost before results-ready persistence")
         return gpt, claude

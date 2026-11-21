@@ -270,10 +270,36 @@ def structure_events(
     pivot_events = tuple(events)
 
     def bias_before(when: datetime) -> Direction:
-        kinds = {event.kind for event in pivot_events if event.confirmed_at_utc <= when}
-        if {StructureKind.HH, StructureKind.HL} <= kinds:
+        confirmed = tuple(event for event in pivot_events if event.confirmed_at_utc <= when)
+        latest_high = next(
+            (
+                event
+                for event in reversed(confirmed)
+                if event.kind in {StructureKind.HH, StructureKind.LH}
+            ),
+            None,
+        )
+        latest_low = next(
+            (
+                event
+                for event in reversed(confirmed)
+                if event.kind in {StructureKind.HL, StructureKind.LL}
+            ),
+            None,
+        )
+        if (
+            latest_high is not None
+            and latest_low is not None
+            and latest_high.kind is StructureKind.HH
+            and latest_low.kind is StructureKind.HL
+        ):
             return Direction.BULLISH
-        if {StructureKind.LH, StructureKind.LL} <= kinds:
+        if (
+            latest_high is not None
+            and latest_low is not None
+            and latest_high.kind is StructureKind.LH
+            and latest_low.kind is StructureKind.LL
+        ):
             return Direction.BEARISH
         return Direction.NEUTRAL
 

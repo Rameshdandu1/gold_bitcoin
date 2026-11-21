@@ -1,8 +1,9 @@
 """Environment-driven settings; live external services are OFF by default."""
 
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +67,37 @@ class Settings(BaseSettings):
     coinglass_plan: str = Field(
         default="HOBBYIST", pattern="^(HOBBYIST|STARTUP|STANDARD|PROFESSIONAL|ENTERPRISE)$"
     )
+
+    @field_validator(
+        "openai_input_microusd_per_million_tokens",
+        "openai_output_microusd_per_million_tokens",
+        "anthropic_input_microusd_per_million_tokens",
+        "anthropic_output_microusd_per_million_tokens",
+        mode="before",
+    )
+    @classmethod
+    def blank_optional_rates_are_missing(cls, value: object) -> object:
+        """The distributed template uses blanks to mean deliberately unconfigured pricing."""
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator(
+        "risk_fee_bps",
+        "risk_slippage_bps",
+        "risk_maximum_entry_drift_bps",
+        "risk_maximum_spread_bps",
+        "risk_minimum_net_reward_risk",
+    )
+    @classmethod
+    def finite_non_negative_decimal_settings(cls, value: str) -> str:
+        if value == "":
+            return value
+        try:
+            parsed = Decimal(value)
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("Risk settings must be finite decimal values") from exc
+        if not parsed.is_finite() or parsed < 0:
+            raise ValueError("Risk settings must be finite non-negative decimal values")
+        return value
 
     @model_validator(mode="after")
     def block_execution(self) -> "Settings":

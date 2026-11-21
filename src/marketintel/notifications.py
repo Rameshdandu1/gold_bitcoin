@@ -10,7 +10,9 @@ from typing import Protocol
 
 import httpx
 
+from marketintel.analysis import load_canonical_analysis
 from marketintel.config import Settings
+from marketintel.review_worker import current_eligibility
 from marketintel.storage import Store
 
 SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
@@ -113,6 +115,15 @@ class AlertWorker:
         )
         if item is None:
             return False
+        expected_destination = f"slack:{self.settings.slack_channel_id}"
+        if item["destination_id"] != expected_destination:
+            self.store.finish_outbox_attempt(
+                item,
+                status="SUPPRESSED",
+                now=now,
+                error="immutable destination is not served by current configuration",
+            )
+            return True
         eligible, reason = self.store.outbox_delivery_eligible(item, now=now)
         if not eligible:
             self.store.finish_outbox_attempt(
@@ -122,10 +133,47 @@ class AlertWorker:
                 error=reason,
             )
             return True
+        if item["event_type"] == "CONFIRMED":
+            decision = self.store.consensus_decision_by_id(item["decision_id"])
+            payload = (
+                self.store.analysis_envelope_bytes(decision["envelope_digest"])
+                if decision is not None
+                else None
+            )
+            if decision is None or payload is None:
+                self.store.finish_outbox_attempt(
+                    item,
+                    status="SUPPRESSED",
+                    now=now,
+                    error="confirmation evidence is unavailable",
+                )
+                return True
+            analysis = load_canonical_analysis(payload, decision["envelope_digest"])
+            current = current_eligibility(self.store, self.settings, analysis, now=now)
+            current_checks = {
+                "stop breach": not current.stop_breached,
+                "target exhaustion": not current.target_crossed_indices,
+                "event ordering": not current.event_order_ambiguous,
+                "instrument discovery": current.discovery_current,
+                "candle reconciliation": current.reconciliation_current,
+                "trade stream": current.trade_stream_current,
+                "validated book": current.book_current,
+            }
+            failed = [name for name, passed in current_checks.items() if not passed]
+            if failed:
+                self.store.finish_outbox_attempt(
+                    item,
+                    status="SUPPRESSED",
+                    now=now,
+                    error="current confirmation gate failed: " + ", ".join(failed),
+                )
+                return True
+        if not self.store.mark_outbox_dispatch_started(item, now=now):
+            return True
         try:
             receipt = await self.transport.send(
                 token=token,
-                channel_id=self.settings.slack_channel_id,
+                channel_id=item["destination_id"].split(":", 1)[1],
                 text=render_alert(item["payload"]),
                 delivery_key=item["delivery_key"],
             )
