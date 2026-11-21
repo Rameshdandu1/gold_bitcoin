@@ -1,15 +1,32 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: Design v0.3 / research MVP. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: Design v0.4 / research MVP. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
-**Independent review:** the original session-history, repeated-first-break and future-availability
-counterexamples are fixed, and the Phase 3 baseline passes 171 tests. The subsequent
-[Phase 3 review](docs/audits/phase-3-independent-review.md) identifies unresolved integration defects,
-including inconsistent final-risk snapshots and stale alert dispatch. Architectural requirements
-below must not be read as proof that all guarantees are already enforced. Follow
+## Phase 4 evidence architecture
+
+Historical observations carry exchange time and factual `available_at_utc`; replay orders by
+availability time, persistence sequence, event-kind priority and immutable event ID. Dataset
+manifests pin file hashes/counts, instruments, source coverage/gaps, code/rule versions, provenance
+and data mode. A rolling hash and atomic checkpoint make resume deterministic without revealing
+corrections before their recorded arrival.
+
+`research.sqlite3` stores experiment inputs, replay points, common-opportunity arm records and
+reports. `paper.sqlite3` stores prospective decisions before outcomes, cursors and gaps. Both reject
+the production database path and never use production review/outbox tables.
+
+Every arm enters at its actual decision-ready time. Long entries use ask and exits bid; shorts use
+bid and exits ask. Tick rounding/slippage are adverse, fees cover both sides, instrument contract
+units are versioned, and required funding fails closed. Outcomes preserve `NO_ENTRY`, target, stop,
+time exit, `AMBIGUOUS` and `INCOMPLETE`. Folds keep all opportunity revisions/arms together and
+purge overlapping label-information intervals with a time embargo.
+
+**Independent review:** the original Phase 2 counterexamples and the subsequent
+[Phase 3 review](docs/audits/phase-3-independent-review.md) findings have regression coverage and
+Phase 4 corrections. Architectural requirements remain distinct from empirical acceptance: live
+providers, licensed data, prospective duration and deployment are not proven by fixtures. Follow
 [CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md), starting with corrective slice 4A. Passing fixtures are
 not evidence of live provider readiness or strategy performance.
 

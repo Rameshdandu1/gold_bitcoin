@@ -98,26 +98,30 @@ current startup, live review and alert guarantees still require the corrective 4
 
 Detailed implementation instructions: [CODEX_PHASE_4.md](../prompts/CODEX_PHASE_4.md).
 
-- [ ] **4A:** fix environment-template parsing, complete-bucket reconciliation, request digest,
+- [x] **4A:** fix environment-template parsing, complete-bucket reconciliation, request digest,
   revision scheduling, consistent risk/commit evidence, real input/spend limits, model/finish-status
   identity, dispatch recovery/destination, current alert eligibility and structure-state logic.
   Test finalization crashes/deadlines and non-ASCII auth input handling.
-- [ ] **4B:** versioned dataset manifest and isolated as-observed replay, driven by factual
+- [x] **4B:** versioned dataset manifest and isolated as-observed replay, driven by factual
   availability/evaluation clocks with separate exchange event time, coverage and checkpoint parity.
-- [ ] **4C:** eligible entry time, instrument/target identity, complete outcome path, conservative
+- [x] **4C:** eligible entry time, instrument/target identity, complete outcome path, conservative
   ambiguity, realistic quote-side fills and versioned contract/fee/slippage/funding assumptions.
-- [ ] **4D:** rules/GPT/Claude/dual filter comparisons on common opportunities, arm-specific latency,
+- [x] **4D:** rules/GPT/Claude/dual filter comparisons on common opportunities, arm-specific latency,
   preserved abstention denominators, shared opportunity folds, time-based label-information
   purging including delayed no-entry outcomes, untouched holdout and dependence-aware uncertainty.
   Retrospective LLM analysis remains explicitly exploratory.
-- [ ] **4E:** durable prospective paper ledger, write-before-outcome decisions, restart/gap handling
+- [x] **4E:** durable prospective paper ledger, write-before-outcome decisions, restart/gap handling
   and separately declared hypothetical portfolio policy. Default off; no exchange orders.
-- [ ] **4F:** authenticated research pages, reproducible CLI/exports, coverage/sample/uncertainty
+- [x] **4F:** authenticated research pages, reproducible CLI/exports, coverage/sample/uncertainty
   reporting, honest insufficient-evidence states and native Windows run instructions.
 
 Software/fixture completion does not complete weeks of forward observation or demonstrate an edge.
 Unavailable historical trades/books, licensed context and contemporaneous AI outputs stay
 unavailable; no synthetic performance may be presented as empirical evidence.
+
+These checkboxes mean software and deterministic-fixture completion only. Real dataset licensing,
+genuine historical provider assessments, forward paper observation, statistical uncertainty on an
+adequate sample and destination Windows Server deployment remain open acceptance work.
 
 ## Phase 5 — derivatives/optional execution (separate approval)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.

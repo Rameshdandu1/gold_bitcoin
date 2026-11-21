@@ -111,7 +111,24 @@ stopping writers, restoring the pre-migration backup and running the previous si
 version. A `DISPATCHED` review job or `RECEIPT_UNKNOWN` alert requires operator reconciliation; do
 not blindly reset it to queued.
 
-## 6. Operational acceptance still required
+## 6. Offline research and bounded paper recording
+
+Use the repository virtual environment and Windows paths. Research and paper files must not equal
+`DATABASE_PATH`:
+
+```powershell
+.\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest tests\fixtures\research\manifest.json
+.\.venv\Scripts\python.exe -m marketintel.research replay --manifest tests\fixtures\research\manifest.json --config tests\fixtures\research\experiment.json --database data\research.sqlite3 --production-database data\marketintel.sqlite3 --checkpoint data\research-checkpoint.json
+.\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
+```
+
+The example paper config and `PAPER_COLLECTION_ENABLED` are disabled. Enable collection only for an
+approved local recorded-decision source; the worker is bounded by `--once` and cannot send orders.
+Back up both research SQLite files, manifests, configs, checkpoints and report `SHA256SUMS` together.
+Verify checkpoint restart hash parity, retain explicit source gaps and never edit a recorded paper
+decision. Destination-server task installation, reboot/restore and long paper soak were not run.
+
+## 7. Operational acceptance still required
 
 - Verify Delta symbols/units and perform an extended reconnect, gap, clock-drift and storage-rate
   soak; SQLite capacity is intentionally not claimed.

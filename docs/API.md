@@ -19,6 +19,7 @@ authentication only over a trusted loopback connection, VPN, or an HTTPS reverse
 | `GET /api/snapshots/{snapshot_id}` | exact quantitative feature snapshot or `null` |
 | `GET /api/budget` | current UTC-day provider reservations and reported costs |
 | `GET /api/queue` | review-job and alert-outbox counts plus stale lease counts |
+| `GET /api/research/summary` | isolated experiment/paper counts and explicit evidence classification; no external call |
 | `GET /docs`, `/openapi.json` | authenticated FastAPI schema and documentation |
 
 Candidate responses keep `current_lifecycle_*` separate from historical consensus. Provider cards
@@ -36,3 +37,7 @@ CoinGlass V4 and Slack Web API are behind environment configuration. AI, CoinGla
 and Slack delivery are disabled by default. Configuring credentials does not authorize tests to make
 paid calls or send messages. Current model/account entitlement and actual Slack delivery require a
 separate bounded operator-approved smoke test.
+
+The research summary uses the same operator authentication as every non-liveness route.
+`NOT_STARTED`, `EXPLORATORY` and insufficient-evidence labels are evidence states, not zero return
+or a failed-strategy result. It returns counts and classifications, not secrets or dataset rows.
