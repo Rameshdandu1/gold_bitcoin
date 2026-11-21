@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from marketintel.analysis import CanonicalAnalysis, canonical_json_bytes
+from marketintel.application_policy import ApplicationPolicyInput, evaluate_application_policy
 from marketintel.models import AnalystAssessment, Candidate, ConsensusResult, Status
 from marketintel.review import (
     ConsensusDecisionV2,
@@ -31,48 +32,40 @@ def evaluate_current_risk(
 
     now = eligibility.evaluated_at_utc
     current = True
-    current &= gate(
-        "ACTIVE_REVISION",
-        eligibility.candidate_id == envelope.candidate_id
-        and eligibility.candidate_revision_id == envelope.candidate_revision_id,
-        "Eligibility snapshot must match the scheduled revision",
+    shared = evaluate_application_policy(
+        ApplicationPolicyInput(
+            revision_current=(
+                eligibility.candidate_id == envelope.candidate_id
+                and eligibility.candidate_revision_id == envelope.candidate_revision_id
+            ),
+            lifecycle_state=eligibility.lifecycle_state,
+            observed_at_utc=envelope.observed_at_utc,
+            expires_at_utc=envelope.expires_at_utc,
+            evaluated_at_utc=now,
+            market_observed_at_utc=max(
+                envelope.feature_snapshot.observed_at_utc,
+                eligibility.latest_trade_at_utc,
+                eligibility.book_observed_at_utc,
+            ),
+            sources_current=(
+                eligibility.discovery_current
+                and eligibility.reconciliation_current
+                and eligibility.trade_stream_current
+                and eligibility.book_current
+            ),
+            event_order_ambiguous=eligibility.event_order_ambiguous,
+            stop_breached=eligibility.stop_breached,
+            direction=envelope.direction,
+            entry=Decimal(envelope.entry),
+            invalidation=Decimal(envelope.invalidation),
+            best_bid=Decimal(eligibility.best_bid),
+            best_ask=Decimal(eligibility.best_ask),
+            maximum_spread_bps=Decimal(eligibility.maximum_spread_bps),
+            maximum_entry_drift_bps=Decimal(eligibility.maximum_entry_drift_bps),
+        )
     )
-    current &= gate(
-        "LIFECYCLE",
-        eligibility.lifecycle_state == "CANDIDATE",
-        f"Current lifecycle={eligibility.lifecycle_state}",
-    )
-    current &= gate(
-        "EXPIRY",
-        now < envelope.expires_at_utc,
-        "Candidate must be unexpired",
-    )
-    current &= gate(
-        "POINT_IN_TIME",
-        envelope.observed_at_utc <= now
-        and envelope.feature_snapshot.observed_at_utc <= now
-        and eligibility.latest_trade_at_utc <= now
-        and eligibility.book_observed_at_utc <= now,
-        "Observation, trade and book timestamps cannot be in the future",
-    )
-    current &= gate(
-        "REQUIRED_SOURCES",
-        eligibility.discovery_current
-        and eligibility.reconciliation_current
-        and eligibility.trade_stream_current
-        and eligibility.book_current,
-        "Discovery, reconciliation, trades and validated book must be current",
-    )
-    current &= gate(
-        "EVENT_ORDER",
-        not eligibility.event_order_ambiguous,
-        "Stop/target ordering must be unambiguous",
-    )
-    current &= gate(
-        "STOP_BREACH",
-        not eligibility.stop_breached,
-        "Any post-observation stop breach is terminal",
-    )
+    for row in shared.checks:
+        current &= gate(row.code, row.passed, row.detail)
     current &= gate(
         "COST_ASSUMPTIONS",
         eligibility.required_costs_known
@@ -97,42 +90,15 @@ def evaluate_current_risk(
             gates=tuple(gates),
         )
 
-    entry = Decimal(envelope.entry)
     invalidation = Decimal(envelope.invalidation)
     bid = Decimal(eligibility.best_bid)
     ask = Decimal(eligibility.best_ask)
-    if ask <= bid:
-        gate("BOOK_GEOMETRY", False, "Best ask must be greater than best bid")
-        return CurrentRiskResult(
-            eligible=False,
-            reason="Current order book geometry is invalid",
-            gates=tuple(gates),
-        )
     quote_entry = ask if envelope.direction == "BULLISH" else bid
-    spread_bps = (ask - bid) / ((ask + bid) / Decimal("2")) * Decimal("10000")
-    drift_bps = abs(quote_entry - entry) / entry * Decimal("10000")
-    geometry_ok = gate(
-        "SPREAD",
-        spread_bps <= Decimal(eligibility.maximum_spread_bps),
-        f"spread_bps={spread_bps}",
-    )
-    geometry_ok &= gate(
-        "ENTRY_DRIFT",
-        drift_bps <= Decimal(eligibility.maximum_entry_drift_bps),
-        f"entry_drift_bps={drift_bps}",
-    )
     risk = (
         quote_entry - invalidation
         if envelope.direction == "BULLISH"
         else invalidation - quote_entry
     )
-    geometry_ok &= gate("RISK_GEOMETRY", risk > 0, f"current_risk={risk}")
-    if not geometry_ok:
-        return CurrentRiskResult(
-            eligible=False,
-            reason="Current spread, entry drift or stop geometry failed",
-            gates=tuple(gates),
-        )
 
     costs = (
         quote_entry

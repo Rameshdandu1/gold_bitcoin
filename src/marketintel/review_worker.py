@@ -114,10 +114,20 @@ def current_eligibility(
             settings.delta_reconciliation_max_age_seconds,
         ),
     ]
-    if book is not None and book.last_received_at_utc is not None:
-        freshness_deadlines.append(
-            book.last_received_at_utc + timedelta(seconds=book.max_age_seconds)
-        )
+    if book is not None:
+        if book.last_event_time_utc is not None:
+            # OrderBookAssembler.quality() ages the book from exchange event time.
+            # Authorization must expire on the same predicate, even when a packet
+            # was received late and its local receipt is comparatively recent.
+            freshness_deadlines.append(
+                book.last_event_time_utc + timedelta(seconds=book.max_age_seconds)
+            )
+        if book.last_received_at_utc is not None:
+            # Keep receipt age as an independent upper bound. The minimum of the
+            # event and receipt limits is the only safe dispatch fence.
+            freshness_deadlines.append(
+                book.last_received_at_utc + timedelta(seconds=book.max_age_seconds)
+            )
 
     return EligibilitySnapshot(
         candidate_id=envelope.candidate_id,

@@ -219,9 +219,15 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         latest = summary.get("latest_experiment")
         detail = research_store.experiment_detail(latest["experiment_id"]) if latest else None
         actions = detail.get("action_counts") if detail else None
+        paper_summary = paper_ledger.summary()
+        if latest and detail:
+            paper_summary = paper_ledger.summary(
+                experiment_id=latest["experiment_id"],
+                include_protected=detail["holdout_state"] != "HOLDOUT_PROTECTED",
+            )
         return {
             **summary,
-            "paper": paper_ledger.summary(),
+            "paper": paper_summary,
             "data_mode": latest["data_mode"] if latest else "NO_DATASET_SELECTED",
             "selected_experiment_id": latest["experiment_id"] if latest else None,
             "external_calls_performed": actions["external_calls"] if actions else None,
@@ -264,10 +270,28 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         return research_store.opportunity_page(experiment_id, limit=limit, offset=offset)
 
     @app.get("/api/research/paper/transitions")
-    def research_paper_transitions(limit: int = 100, offset: int = 0) -> list[dict]:
+    def research_paper_transitions(
+        limit: int = 100, offset: int = 0, experiment_id: str | None = None
+    ) -> list[dict]:
+        research_store = ResearchStore(
+            settings.research_database_path, production_path=settings.database_path
+        )
+        if experiment_id is None:
+            latest = research_store.summary().get("latest_experiment")
+            experiment_id = latest["experiment_id"] if latest else None
+        if experiment_id is None:
+            return []
+        detail = research_store.experiment_detail(experiment_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Research experiment not found")
         return PaperLedger(
             settings.paper_database_path, production_path=settings.database_path
-        ).transitions(limit=limit, offset=offset)
+        ).transitions(
+            limit=limit,
+            offset=offset,
+            experiment_id=experiment_id,
+            include_protected=detail["holdout_state"] != "HOLDOUT_PROTECTED",
+        )
 
     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if dist.is_dir():
