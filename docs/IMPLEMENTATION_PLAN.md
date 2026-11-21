@@ -83,11 +83,41 @@ Implementation order and acceptance details are in [CODEX_PHASE_3.md](../prompts
 AI and outbound alerts remain disabled by default. Fixture completion, paid-provider smoke tests,
 Windows deployment and strategy-performance validation are separate evidence categories.
 
-## Phase 4 — historical evaluation
-15. Historical market replay (event-time ordered), embargo/purged walk-forward test, no interpolation of future prices.
-16. Label target-before-stop, model immediate spread/slippage/fees, ambiguous same-bar stop-target as loss/uncertain, per-session breakdown.
-17. Compare rules-only vs GPT only vs Claude only vs agreement and rejection losses; publish sample size, calibration error, net expectancy and confidence intervals (statistical, not LLM).
+**Independent Phase 3 review gate (2026-11-21):** the implementation checkboxes above describe
+delivered code, not closed acceptance. The 171-test baseline passes, but
+[the independent review](audits/phase-3-independent-review.md) reproduces P3-01 through P3-10 and
+identifies recovery/deadline acceptance gaps. The original Phase 2 counterexamples improved;
+current startup, live review and alert guarantees still require the corrective 4A slice.
+
+## Phase 4 — historical evaluation and prospective paper research
+
+15. Historical replay driven by factual availability and evaluation cadence, with separate exchange event time, purged chronological validation and no interpolation of future prices.
+16. Label target-before-stop from each arm's eligible entry, model spread/slippage/fees, preserve partial-bar and missing-path ambiguity, and report per-session breakdowns.
+17. Compare rules-only, rules plus GPT, rules plus Claude and rules plus dual agreement on common opportunities; publish sample size, coverage, net expectancy and statistical uncertainty. Calibration is N/A unless an out-of-sample probability estimator actually exists.
 18. Paper-trade at least several weeks across regimes. Define release gate in measured terms; NEVER claim made-up hit rates.
+
+Detailed implementation instructions: [CODEX_PHASE_4.md](../prompts/CODEX_PHASE_4.md).
+
+- [ ] **4A:** fix environment-template parsing, complete-bucket reconciliation, request digest,
+  revision scheduling, consistent risk/commit evidence, real input/spend limits, model/finish-status
+  identity, dispatch recovery/destination, current alert eligibility and structure-state logic.
+  Test finalization crashes/deadlines and non-ASCII auth input handling.
+- [ ] **4B:** versioned dataset manifest and isolated as-observed replay, driven by factual
+  availability/evaluation clocks with separate exchange event time, coverage and checkpoint parity.
+- [ ] **4C:** eligible entry time, instrument/target identity, complete outcome path, conservative
+  ambiguity, realistic quote-side fills and versioned contract/fee/slippage/funding assumptions.
+- [ ] **4D:** rules/GPT/Claude/dual filter comparisons on common opportunities, arm-specific latency,
+  preserved abstention denominators, shared opportunity folds, time-based label-information
+  purging including delayed no-entry outcomes, untouched holdout and dependence-aware uncertainty.
+  Retrospective LLM analysis remains explicitly exploratory.
+- [ ] **4E:** durable prospective paper ledger, write-before-outcome decisions, restart/gap handling
+  and separately declared hypothetical portfolio policy. Default off; no exchange orders.
+- [ ] **4F:** authenticated research pages, reproducible CLI/exports, coverage/sample/uncertainty
+  reporting, honest insufficient-evidence states and native Windows run instructions.
+
+Software/fixture completion does not complete weeks of forward observation or demonstrate an edge.
+Unavailable historical trades/books, licensed context and contemporaneous AI outputs stay
+unavailable; no synthetic performance may be presented as empirical evidence.
 
 ## Phase 5 — derivatives/optional execution (separate approval)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.
@@ -96,7 +126,7 @@ Windows deployment and strategy-performance validation are separate evidence cat
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
-- M3: implemented and fixture-verified. Live provider/model entitlement, paid-call behavior, Slack
-  delivery, Windows Task Scheduler installation and extended market soak remain explicit operator
-  acceptance gates; passing fixtures are not a strategy-performance claim.
+- M3: implemented with a passing fixture baseline; independent review acceptance remains blocked
+  by the findings assigned to 4A. Live provider/model entitlement, paid-call behavior, Slack delivery,
+  Windows installation and extended market soak remain separate operator acceptance gates.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.

@@ -5,11 +5,13 @@ review and Slack alerts; all external paths are disabled by default and order ex
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
-**Independent review:** the v0.2 findings documented in
-[the Phase 2 review](docs/audits/phase-2-independent-review.md) were the Phase 3 entry gate. The
-corrective and dual-provider slices are now implemented and regression-tested; see
-[the Phase 3 verification report](docs/audits/phase-3-verification.md). Architectural requirements
-and passing fixtures are not evidence of live provider readiness or strategy performance.
+**Independent review:** the original session-history, repeated-first-break and future-availability
+counterexamples are fixed, and the Phase 3 baseline passes 171 tests. The subsequent
+[Phase 3 review](docs/audits/phase-3-independent-review.md) identifies unresolved integration defects,
+including inconsistent final-risk snapshots and stale alert dispatch. Architectural requirements
+below must not be read as proof that all guarantees are already enforced. Follow
+[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md), starting with corrective slice 4A. Passing fixtures are
+not evidence of live provider readiness or strategy performance.
 
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.
@@ -89,9 +91,11 @@ ATR is a scale, not a directional prediction. Naive `ATR * sqrt(horizon / bar_mi
 - **M1 single-host store**: SQLite WAL contains immutable candidate/audit records plus an append-only
   raw public-event journal keyed by UTC-day logical partition. Database triggers block raw event
   updates/deletes. Deterministic replay rebuilds closed trade-derived candles and books. REST
-  candles carry their response availability time in memory but are not yet stored as a raw source.
-  Feature snapshots and candidate/lifecycle evidence are persisted. This is durable across
-  process restart but is not yet throughput-qualified as a high-frequency production tick database.
+  candles carry their response availability time; Phase 3 also journals normalized REST candle
+  observations with request bounds, response availability and a digest. This is not a full raw
+  HTTP-response archive. Feature snapshots and candidate/lifecycle evidence are persisted. This is
+  durable across process restart but is not yet throughput-qualified as a high-frequency production
+  tick database.
 - **Production target**: PostgreSQL + TimescaleDB (Windows native PostgreSQL or optional isolated Linux VM), durable raw events and candle tables; queue via PostgreSQL outbox or Redis in a supported Linux VM. Do NOT rely on discontinued native Windows Redis ports. Migrate only after measured feed throughput.
 - **Phase 3 single-host path**: additive SQLite migration adds immutable envelopes, review runs,
   fenced job leases, provider attempts, UTC budget ledger, decisions and alert outbox. SQLite backup
