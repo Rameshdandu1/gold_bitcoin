@@ -42,7 +42,7 @@ def _authorized(request: Request, settings: Settings) -> bool:
 def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
     settings = settings or Settings()
     store = store or Store(settings.database_path)
-    app = FastAPI(title=settings.app_name, version="0.5.0")
+    app = FastAPI(title=settings.app_name, version="0.6.0")
     allowed_origins = tuple(
         origin.strip() for origin in settings.cors_allowed_origins_csv.split(",") if origin.strip()
     )
@@ -92,7 +92,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             <= settings.delta_discovery_refresh_seconds + 60
         )
         checks = {
-            "database_migration": "0005_phase5_operational_fencing" in store.migration_ids(),
+            "database_migration": "0006_phase6_evidence_integrity" in store.migration_ids(),
             "operator_authentication": (
                 not settings.operator_auth_enabled
                 or bool(

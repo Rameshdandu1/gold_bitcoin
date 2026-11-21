@@ -19,7 +19,7 @@ from marketintel.detectors import EngineConfig
 from marketintel.features import structure_events
 from marketintel.models import Candle, Direction, StructureKind
 from marketintel.notifications import AlertWorker
-from marketintel.orchestration import ReviewOrchestrator
+from marketintel.orchestration import ReviewOrchestrator, frozen_provider_config
 from marketintel.quantitative import lifecycle_event
 from marketintel.review import TokenUsage
 from marketintel.review_worker import ReviewWorker, current_eligibility
@@ -442,22 +442,20 @@ async def test_p3_09_queued_model_identity_mismatch_makes_zero_calls(tmp_path):
         ClaudeAnalyst(settings, claude_transport),
     ).execute(analysis, run_id=run_id, claim=claim)
 
-    assert {item.failure_code for item in results} == {"QUEUED_PROVIDER_CONFIGURATION_MISMATCH"}
+    assert {item.failure_code for item in results} == {"LEGACY_REQUEST_CONFIGURATION_INCOMPLETE"}
     assert gpt_transport.calls == claude_transport.calls == 0
 
 
 @pytest.mark.asyncio
 async def test_p3_07_complete_oversized_request_makes_zero_provider_calls(tmp_path):
-    _, analysis = analysis_fixture()
+    candidate, analysis = analysis_fixture()
     settings = review_settings(ai_max_input_tokens=1_000)
     store = Store(tmp_path / "input-bound.sqlite3")
-    now = datetime.now(UTC)
+    committed_alert(store)
+    now = candidate.observed_at_utc + timedelta(minutes=1)
     run_id = store.create_review_run(
         analysis,
-        provider_config={
-            "openai_model": settings.openai_model,
-            "anthropic_model": settings.anthropic_model,
-        },
+        provider_config=frozen_provider_config(settings, analysis),
         now=now,
         deadline_at=now + timedelta(seconds=30),
     )
@@ -471,6 +469,7 @@ async def test_p3_07_complete_oversized_request_makes_zero_provider_calls(tmp_pa
         settings,
         GPTAnalyst(settings, gpt_transport),
         ClaudeAnalyst(settings, claude_transport),
+        clock=lambda: now,
     ).execute(analysis, run_id=run_id, claim=claim)
 
     assert all(item.failure_code == "COMPLETE_REQUEST_INPUT_LIMIT_EXCEEDED" for item in results)
@@ -802,9 +801,9 @@ def test_p3_05_insert_between_risk_read_and_token_capture_blocks_commit(tmp_path
     original = Store._eligibility_token_in_transaction
     inserted = False
 
-    def insert_after_snapshot_starts(conn, candidate_id):
+    def insert_after_snapshot_starts(conn, candidate_id, through=None):
         nonlocal inserted
-        result = original(conn, candidate_id)
+        result = original(conn, candidate_id, through=through)
         if not inserted:
             inserted = True
             breach_at = candidate.observed_at_utc + timedelta(seconds=20)

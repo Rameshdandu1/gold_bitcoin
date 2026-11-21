@@ -94,7 +94,13 @@ def _outcome(
         adverse_excursion=adverse_excursion,
         supporting_event_ids=events,
         data_complete=complete,
+        decision_evidence_mode=decision.evidence_mode,
     )
+
+
+def _quote_available_at(quote: ExecutableQuote) -> datetime:
+    available = quote.available_at_utc or quote.observed_at_utc
+    return max(quote.observed_at_utc, available)
 
 
 def evaluate_quotes(
@@ -106,6 +112,8 @@ def evaluate_quotes(
     *,
     target_index: int = 1,
     entry_latency_ms: int = 0,
+    source_transitions: Iterable[tuple[datetime, str | object]] = (),
+    evaluated_through_utc: datetime | None = None,
 ) -> ResearchOutcome:
     """Evaluate against ordered executable quotes using each arm's real ready time."""
     if target_index < 1 or target_index > len(candidate.targets):
@@ -145,16 +153,58 @@ def evaluate_quotes(
             "DECISION_READY_AFTER_EXPIRY",
             complete=True,
         )
-    ordered = sorted(quotes, key=lambda row: (row.observed_at_utc, row.event_id))
+    ordered = sorted(quotes, key=lambda row: (_quote_available_at(row), row.event_id))
     matching = [
         row
         for row in ordered
         if row.venue == candidate.venue
         and row.symbol == candidate.symbol
         and candidate.observed_at_utc <= row.observed_at_utc <= candidate.expires_at_utc
+        and _quote_available_at(row) <= candidate.expires_at_utc
     ]
     target = candidate.targets[target_index - 1]
-    pre_entry = [row for row in matching if row.observed_at_utc < ready]
+    interruptions = sorted(
+        (at, getattr(transition, "state", transition))
+        for at, transition in source_transitions
+        if candidate.observed_at_utc <= at <= candidate.expires_at_utc
+    )
+
+    def source_interrupted(through: datetime) -> bool:
+        return any(at <= through and state != "AVAILABLE" for at, state in interruptions)
+
+    pre_entry = [row for row in matching if _quote_available_at(row) < ready]
+    if (
+        not matching
+        or (_quote_available_at(matching[0]) - candidate.observed_at_utc).total_seconds()
+        > policy.maximum_quote_gap_seconds
+    ):
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "PRE_ENTRY_QUOTE_COVERAGE_INCOMPLETE",
+            events=((matching[0].event_id,) if matching else ()),
+            complete=False,
+        )
+    coverage_previous_at = candidate.observed_at_utc
+    coverage_previous_id = matching[0].event_id
+    for row in matching:
+        row_at = _quote_available_at(row)
+        if row_at >= ready:
+            break
+        if (row_at - coverage_previous_at).total_seconds() > policy.maximum_quote_gap_seconds:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "PRE_ENTRY_QUOTE_COVERAGE_INCOMPLETE",
+                events=(coverage_previous_id, row.event_id),
+                complete=False,
+            )
+        coverage_previous_at = row_at
+        coverage_previous_id = row.event_id
     for row in pre_entry:
         stop_hit = (
             row.bid <= candidate.invalidation
@@ -173,7 +223,7 @@ def evaluate_quotes(
                 complete=True,
             )
     entry_quotes = [
-        row for row in matching if ready <= row.observed_at_utc < candidate.expires_at_utc
+        row for row in matching if ready <= _quote_available_at(row) < candidate.expires_at_utc
     ]
     if not entry_quotes:
         return _outcome(
@@ -185,7 +235,20 @@ def evaluate_quotes(
             complete=False,
         )
     first = entry_quotes[0]
-    if (first.observed_at_utc - ready).total_seconds() > policy.maximum_quote_gap_seconds:
+    first_at = _quote_available_at(first)
+    if source_interrupted(first_at):
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "SOURCE_UNAVAILABLE_DURING_PRE_ENTRY_PATH",
+            events=(first.event_id,),
+            complete=False,
+        )
+    if (first_at - max(ready, coverage_previous_at)).total_seconds() > (
+        policy.maximum_quote_gap_seconds
+    ):
         return _outcome(
             candidate,
             decision,
@@ -196,8 +259,8 @@ def evaluate_quotes(
             complete=False,
         )
     if not (
-        instrument.valid_from_utc <= first.observed_at_utc
-        and (instrument.valid_to_utc is None or first.observed_at_utc < instrument.valid_to_utc)
+        instrument.valid_from_utc <= first_at
+        and (instrument.valid_to_utc is None or first_at < instrument.valid_to_utc)
     ):
         return _outcome(
             candidate,
@@ -230,15 +293,25 @@ def evaluate_quotes(
     favorable = Decimal(0)
     adverse = Decimal(0)
     relevant = [
-        row
-        for row in matching
-        if first.observed_at_utc <= row.observed_at_utc <= candidate.expires_at_utc
+        row for row in matching if first_at <= _quote_available_at(row) <= candidate.expires_at_utc
     ]
     previous = first
     for quote in relevant:
-        if (quote.observed_at_utc - previous.observed_at_utc).total_seconds() > (
-            policy.maximum_quote_gap_seconds
-        ):
+        quote_at = _quote_available_at(quote)
+        previous_at = _quote_available_at(previous)
+        if source_interrupted(quote_at):
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "SOURCE_UNAVAILABLE_DURING_OUTCOME_PATH",
+                events=(previous.event_id, quote.event_id),
+                complete=False,
+                entry_at=first_at,
+                entry=entry,
+            )
+        if (quote_at - previous_at).total_seconds() > (policy.maximum_quote_gap_seconds):
             return _outcome(
                 candidate,
                 decision,
@@ -247,14 +320,14 @@ def evaluate_quotes(
                 "QUOTE_PATH_GAP_EXCEEDED",
                 events=(previous.event_id, quote.event_id),
                 complete=False,
-                entry_at=first.observed_at_utc,
+                entry_at=first_at,
                 entry=entry,
                 favorable_excursion=favorable,
                 adverse_excursion=adverse,
             )
         if not (
-            instrument.valid_from_utc <= quote.observed_at_utc
-            and (instrument.valid_to_utc is None or quote.observed_at_utc < instrument.valid_to_utc)
+            instrument.valid_from_utc <= quote_at
+            and (instrument.valid_to_utc is None or quote_at < instrument.valid_to_utc)
         ):
             return _outcome(
                 candidate,
@@ -264,7 +337,7 @@ def evaluate_quotes(
                 "INSTRUMENT_VERSION_CHANGED_DURING_PATH",
                 events=(quote.event_id,),
                 complete=False,
-                entry_at=first.observed_at_utc,
+                entry_at=first_at,
                 entry=entry,
             )
         if candidate.direction == "BULLISH":
@@ -290,8 +363,8 @@ def evaluate_quotes(
                 "ORDERED_EXECUTABLE_QUOTE",
                 events=(first.event_id, quote.event_id),
                 complete=True,
-                entry_at=first.observed_at_utc,
-                exit_at=quote.observed_at_utc,
+                entry_at=first_at,
+                exit_at=quote_at,
                 entry=entry,
                 exit=exit_fill,
                 policy=policy,
@@ -300,8 +373,22 @@ def evaluate_quotes(
                 adverse_excursion=adverse,
             )
         previous = quote
+    if evaluated_through_utc is not None and source_interrupted(evaluated_through_utc):
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "SOURCE_UNAVAILABLE_DURING_OUTCOME_PATH",
+            events=(first.event_id, previous.event_id),
+            complete=False,
+            entry_at=first_at,
+            entry=entry,
+            favorable_excursion=favorable,
+            adverse_excursion=adverse,
+        )
     last = relevant[-1]
-    if last.observed_at_utc < candidate.expires_at_utc:
+    if _quote_available_at(last) < candidate.expires_at_utc:
         return _outcome(
             candidate,
             decision,
@@ -310,7 +397,7 @@ def evaluate_quotes(
             "PATH_DOES_NOT_REACH_EXPIRY",
             events=(first.event_id, last.event_id),
             complete=False,
-            entry_at=first.observed_at_utc,
+            entry_at=first_at,
             entry=entry,
             favorable_excursion=favorable,
             adverse_excursion=adverse,
@@ -325,8 +412,8 @@ def evaluate_quotes(
         "EXECUTABLE_QUOTE_AT_EXPIRY",
         events=(first.event_id, last.event_id),
         complete=True,
-        entry_at=first.observed_at_utc,
-        exit_at=last.observed_at_utc,
+        entry_at=first_at,
+        exit_at=_quote_available_at(last),
         entry=entry,
         exit=exit_fill,
         policy=policy,
@@ -365,11 +452,47 @@ def evaluate_bar_path(
             complete=True,
         )
     target = candidate.targets[target_index - 1]
-    for bar in sorted(bars, key=lambda row: (row.end_utc, row.event_id)):
-        if bar.venue != candidate.venue or bar.symbol != candidate.symbol:
-            continue
-        if bar.end_utc <= candidate.observed_at_utc or bar.start_utc >= candidate.expires_at_utc:
-            continue
+    relevant = [
+        bar
+        for bar in sorted(bars, key=lambda row: (row.start_utc, row.end_utc, row.event_id))
+        if bar.venue == candidate.venue
+        and bar.symbol == candidate.symbol
+        and bar.end_utc > candidate.observed_at_utc
+        and bar.start_utc < candidate.expires_at_utc
+    ]
+    coverage_end = candidate.observed_at_utc
+    for bar in relevant:
+        if bar.start_utc < ready < bar.end_utc:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "PARTIAL_BAR_OVERLAPS_ENTRY_BOUNDARY",
+                events=(bar.event_id,),
+                complete=False,
+            )
+        if bar.start_utc < candidate.expires_at_utc < bar.end_utc:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "BAR_OVERLAPS_EXPIRY_BOUNDARY",
+                events=(bar.event_id,),
+                complete=False,
+            )
+        if bar.start_utc > coverage_end:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "OHLC_PATH_GAP",
+                events=(bar.event_id,),
+                complete=False,
+            )
+        coverage_end = max(coverage_end, bar.end_utc)
         target_hit = bar.high >= target if candidate.direction == "BULLISH" else bar.low <= target
         stop_hit = (
             bar.low <= candidate.invalidation

@@ -7,7 +7,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from marketintel.ai import ClaudeAnalyst, GPTAnalyst
@@ -95,6 +95,30 @@ def current_eligibility(
         age = (now - datetime.fromisoformat(timestamp)).total_seconds()
         return 0 <= age <= maximum_age
 
+    def source_deadline(source: str, maximum_age: float) -> datetime:
+        row = health.get(source)
+        timestamp = (row[2] or row[1]) if row is not None else None
+        return (
+            datetime.fromisoformat(timestamp) + timedelta(seconds=maximum_age) if timestamp else now
+        )
+
+    freshness_deadlines = [
+        envelope.expires_at_utc,
+        latest_time + timedelta(seconds=settings.data_max_age_seconds),
+        source_deadline(
+            f"product_discovery:{envelope.asset}",
+            settings.delta_discovery_max_age_seconds,
+        ),
+        source_deadline(
+            f"candle_reconciliation:{envelope.symbol}",
+            settings.delta_reconciliation_max_age_seconds,
+        ),
+    ]
+    if book is not None and book.last_received_at_utc is not None:
+        freshness_deadlines.append(
+            book.last_received_at_utc + timedelta(seconds=book.max_age_seconds)
+        )
+
     return EligibilitySnapshot(
         candidate_id=envelope.candidate_id,
         candidate_revision_id=str(evidence["revision_id"]),
@@ -102,6 +126,7 @@ def current_eligibility(
         active_revision_generation=int(evidence["generation"]),
         lifecycle_state=lifecycle_state,
         evaluated_at_utc=now,
+        evidence_valid_until_utc=min(freshness_deadlines),
         latest_trade_price=canonical_decimal(latest_price),
         latest_trade_at_utc=latest_time,
         best_bid=canonical_decimal(bid),

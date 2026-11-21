@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
@@ -144,6 +144,7 @@ class EligibilitySnapshot(BaseModel):
     active_revision_generation: int = Field(ge=1)
     lifecycle_state: Literal["CANDIDATE", "INVALIDATED", "EXPIRED"]
     evaluated_at_utc: datetime
+    evidence_valid_until_utc: datetime = datetime.max.replace(tzinfo=UTC)
     latest_trade_price: str
     latest_trade_at_utc: datetime
     best_bid: str

@@ -79,14 +79,9 @@ class ReviewOrchestrator:
 
     def _configuration_failure(self, queued: dict, analysis: CanonicalAnalysis) -> str | None:
         expected = frozen_provider_config(self.settings, analysis)
-        if queued.get("request_config_version") == "phase5-v1":
-            if queued != expected:
-                return "QUEUED_PROVIDER_CONFIGURATION_MISMATCH"
-        elif any(
-            key in queued and queued[key] != expected[key]
-            for key in expected
-            if key != "request_config_version"
-        ):
+        if queued.get("request_config_version") != "phase5-v1":
+            return "LEGACY_REQUEST_CONFIGURATION_INCOMPLETE"
+        if queued != expected:
             return "QUEUED_PROVIDER_CONFIGURATION_MISMATCH"
         return None
 
@@ -333,7 +328,6 @@ class ReviewOrchestrator:
         configuration_failure: str | None = self._configuration_failure(
             run["provider_config"], analysis
         )
-        queued_models = run["provider_config"]
         if self.settings.ai_enabled:
             if configuration_failure is not None:
                 pass
@@ -350,10 +344,7 @@ class ReviewOrchestrator:
                 configuration_failure = "MODEL_PRICE_CONFIGURATION_MISSING"
             elif self.settings.ai_total_cost_limit_microusd_per_day <= 0:
                 configuration_failure = "SPEND_LIMIT_NOT_CONFIGURED"
-        if (
-            configuration_failure is None
-            and queued_models.get("request_config_version") == "phase5-v1"
-        ):
+        if configuration_failure is None:
             configuration_failure = self._preflight_failure(
                 analysis,
                 claim=claim,
@@ -416,7 +407,7 @@ class ReviewOrchestrator:
                 run_id=run_id,
                 claim=claim,
                 deadline_at=deadline_at,
-                strict_preflight=(queued_models.get("request_config_version") == "phase5-v1"),
+                strict_preflight=True,
             ),
             self._run_provider(
                 self.claude,
@@ -424,7 +415,7 @@ class ReviewOrchestrator:
                 run_id=run_id,
                 claim=claim,
                 deadline_at=deadline_at,
-                strict_preflight=(queued_models.get("request_config_version") == "phase5-v1"),
+                strict_preflight=True,
             ),
         )
         if not self.store.mark_review_results_ready(

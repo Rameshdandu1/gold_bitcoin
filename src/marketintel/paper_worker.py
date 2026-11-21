@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import UTC, datetime
@@ -11,7 +12,6 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from marketintel.config import Settings
-from marketintel.research_models import ArmDecision, ResearchCandidate, ResearchOutcome
 from marketintel.research_storage import PaperLedger
 
 
@@ -37,8 +37,12 @@ def run_cycle(config: PaperWorkerConfig, *, now: datetime | None = None) -> dict
     if not config.source_identity:
         raise ValueError("Paper source_identity is required when local input is enabled")
     ledger = PaperLedger(config.ledger_path, production_path=config.production_database_path)
-    with config.recorded_decisions_path.open("r", encoding="utf-8") as handle:
-        source_size = sum(1 for _ in handle)
+    source_lines = config.recorded_decisions_path.read_bytes().splitlines(keepends=True)
+    source_size = len(source_lines)
+
+    def prefix_digest(cursor_value: int) -> str:
+        return hashlib.sha256(b"".join(source_lines[:cursor_value])).hexdigest()
+
     binding = ledger.cursor_binding("recorded_decisions")
     if binding is not None and (
         binding["source_identity"] != config.source_identity
@@ -48,60 +52,46 @@ def run_cycle(config: PaperWorkerConfig, *, now: datetime | None = None) -> dict
     cursor = int(binding["cursor"]) if binding else 0
     if source_size < cursor:
         raise ValueError("Paper source was truncated below its committed cursor")
+    committed_prefix_digest = prefix_digest(cursor)
     ledger.bind_cursor(
         "recorded_decisions",
         source_identity=config.source_identity,
         generation=config.source_generation,
         cursor=cursor,
         source_size=source_size,
+        prefix_digest=committed_prefix_digest,
         now=now,
     )
     decisions = 0
     outcomes = 0
     next_cursor = cursor
-    with config.recorded_decisions_path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle):
-            if line_number < cursor or not line.strip():
-                continue
-            payload = json.loads(line)
-            kind = payload.get("type", "DECISION")
-            if kind == "DECISION":
-                decision = ArmDecision.model_validate(payload["decision"])
-                candidate = ResearchCandidate.model_validate(payload["candidate"])
-                ledger.record_decision(
-                    payload["opportunity_id"],
-                    payload["revision_id"],
-                    decision,
-                    candidate=candidate,
-                    config_hash=payload["config_hash"],
-                    target_index=int(payload["target_index"]),
-                    source_identity=config.source_identity,
-                    evidence_mode=payload.get("evidence_mode", "PROSPECTIVE"),
-                    entry_latency_ms=int(payload.get("entry_latency_ms", 0)),
-                    recorded_at=now or datetime.now(UTC),
-                )
-                decisions += 1
-            elif kind == "OUTCOME":
-                outcome = ResearchOutcome.model_validate(payload["outcome"])
-                ledger.record_outcome(
-                    payload["revision_id"],
-                    outcome,
-                    recorded_at=now or datetime.now(UTC),
-                )
-                outcomes += 1
-            else:
-                raise ValueError(f"Unsupported paper stream event type: {kind}")
-            next_cursor = line_number + 1
-            ledger.bind_cursor(
-                "recorded_decisions",
-                source_identity=config.source_identity,
-                generation=config.source_generation,
-                cursor=next_cursor,
-                source_size=source_size,
-                now=now,
-            )
-            if decisions + outcomes >= config.maximum_records_per_cycle:
-                break
+    for line_number, raw_line in enumerate(source_lines):
+        if line_number < cursor:
+            continue
+        if not raw_line.strip():
+            raise ValueError("Blank records are not permitted in the paper stream")
+        payload = json.loads(raw_line.decode("utf-8"))
+        next_cursor = line_number + 1
+        next_prefix_digest = prefix_digest(next_cursor)
+        kind = ledger.process_stream_event(
+            payload,
+            source="recorded_decisions",
+            source_identity=config.source_identity,
+            generation=config.source_generation,
+            previous_cursor=line_number,
+            cursor=next_cursor,
+            source_size=source_size,
+            previous_prefix_digest=committed_prefix_digest,
+            prefix_digest=next_prefix_digest,
+            recorded_at=now or datetime.now(UTC),
+        )
+        if kind == "DECISION":
+            decisions += 1
+        elif kind == "OUTCOME":
+            outcomes += 1
+        committed_prefix_digest = next_prefix_digest
+        if decisions + outcomes >= config.maximum_records_per_cycle:
+            break
     return {
         "status": "RECORDED",
         "recorded": decisions + outcomes,

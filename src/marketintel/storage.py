@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -206,6 +206,7 @@ class Store:
             self._apply_phase3_migration(conn)
             self._apply_phase4_integration_migration(conn)
             self._apply_phase5_operational_migration(conn)
+            self._apply_phase6_evidence_migration(conn)
             self._backfill_candidate_revision_identities(conn)
 
     def _apply_phase3_migration(self, conn: sqlite3.Connection) -> None:
@@ -453,6 +454,26 @@ class Store:
                 BEFORE DELETE ON review_dispositions
                 BEGIN SELECT RAISE(ABORT, 'review dispositions are append-only'); END;
         """)
+        conn.execute(
+            "INSERT INTO schema_migrations VALUES (?, ?)",
+            (migration_id, datetime.now(UTC).isoformat()),
+        )
+
+    def _apply_phase6_evidence_migration(self, conn: sqlite3.Connection) -> None:
+        migration_id = "0006_phase6_evidence_integrity"
+        if conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE migration_id=?", (migration_id,)
+        ).fetchone():
+            return
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(notification_dispatch_authorizations)")
+        }
+        if "evidence_valid_until_utc" not in columns:
+            conn.execute(
+                "ALTER TABLE notification_dispatch_authorizations "
+                "ADD COLUMN evidence_valid_until_utc TEXT"
+            )
         conn.execute(
             "INSERT INTO schema_migrations VALUES (?, ?)",
             (migration_id, datetime.now(UTC).isoformat()),
@@ -1581,7 +1602,9 @@ class Store:
 
     @staticmethod
     def _eligibility_token_in_transaction(
-        conn: sqlite3.Connection, candidate_id_value: str
+        conn: sqlite3.Connection,
+        candidate_id_value: str,
+        through: datetime | None = None,
     ) -> tuple[str, dict] | None:
         active = conn.execute(
             "SELECT a.revision_id, a.snapshot_id, a.generation, r.payload "
@@ -1620,16 +1643,17 @@ class Store:
             "SELECT updated_at_utc, payload FROM book_checkpoints WHERE symbol=?",
             (candidate["symbol"],),
         ).fetchone()
+        trade_cutoff = through.astimezone(UTC).isoformat() if through is not None else None
         latest_trade = conn.execute(
             "SELECT received_at_utc, event_id FROM raw_market_events "
-            "WHERE symbol=? AND channel='trades' "
+            "WHERE symbol=? AND channel='trades' AND (? IS NULL OR received_at_utc<=?) "
             "ORDER BY received_at_utc DESC, event_id DESC LIMIT 1",
-            (candidate["symbol"],),
+            (candidate["symbol"], trade_cutoff, trade_cutoff),
         ).fetchone()
         trade_generation = conn.execute(
             "SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM raw_market_events "
-            "WHERE symbol=? AND channel='trades'",
-            (candidate["symbol"],),
+            "WHERE symbol=? AND channel='trades' AND (? IS NULL OR received_at_utc<=?)",
+            (candidate["symbol"], trade_cutoff, trade_cutoff),
         ).fetchone()
         evidence = {
             "candidate_id": candidate_id_value,
@@ -1666,7 +1690,9 @@ class Store:
         """Read risk facts and their commit token from one SQLite read snapshot."""
         with self._conn() as conn:
             conn.execute("BEGIN")
-            current = self._eligibility_token_in_transaction(conn, candidate_id_value)
+            current = self._eligibility_token_in_transaction(
+                conn, candidate_id_value, through=through
+            )
             if current is None:
                 return None
             rows = conn.execute(
@@ -1984,11 +2010,14 @@ class Store:
         *,
         now: datetime,
         evidence_token: str | None = None,
+        evidence_valid_until: datetime | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> bool:
         """Fence dispatch against the exact locally persisted evidence that was checked."""
-        now_text = now.astimezone(UTC).isoformat()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            authorization_now = clock() if clock is not None else now
+            now_text = authorization_now.astimezone(UTC).isoformat()
             row = conn.execute(
                 "SELECT status, lease_owner, lease_expires_at_utc, lease_generation, "
                 "revision_id, event_type, payload FROM notification_outbox WHERE outbox_id=?",
@@ -1999,12 +2028,14 @@ class Store:
                 or row[0] != "CLAIMED"
                 or row[1] != item["owner"]
                 or row[2] is None
-                or datetime.fromisoformat(row[2]) < now
+                or datetime.fromisoformat(row[2]) < authorization_now
                 or int(row[3]) != item["generation"]
                 or row[4] != item["revision_id"]
             ):
                 return False
-            current = self._eligibility_token_in_transaction(conn, item["candidate_id"])
+            current = self._eligibility_token_in_transaction(
+                conn, item["candidate_id"], through=authorization_now
+            )
             if current is None:
                 return False
             token, facts = current
@@ -2017,7 +2048,11 @@ class Store:
                     or facts["revision_id"] != item["revision_id"]
                     or lifecycle is None
                     or lifecycle[1] != "CANDIDATE"
-                    or now >= datetime.fromisoformat(payload["expires_at_utc"])
+                    or authorization_now >= datetime.fromisoformat(payload["expires_at_utc"])
+                    or (
+                        evidence_valid_until is not None
+                        and authorization_now > evidence_valid_until
+                    )
                 ):
                     return False
             elif (
@@ -2030,7 +2065,10 @@ class Store:
             authorization_token = evidence_token or token
             try:
                 conn.execute(
-                    "INSERT INTO notification_dispatch_authorizations VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO notification_dispatch_authorizations "
+                    "(outbox_id, lease_generation, evidence_token, revision_id, "
+                    "lifecycle_event_id, authorized_at_utc, evidence_valid_until_utc) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         item["outbox_id"],
                         item["generation"],
@@ -2038,6 +2076,11 @@ class Store:
                         item["revision_id"],
                         lifecycle_event_id,
                         now_text,
+                        (
+                            evidence_valid_until.astimezone(UTC).isoformat()
+                            if evidence_valid_until is not None
+                            else None
+                        ),
                     ),
                 )
             except sqlite3.IntegrityError:
@@ -2060,7 +2103,8 @@ class Store:
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT lease_generation, evidence_token, revision_id, lifecycle_event_id, "
-                "authorized_at_utc FROM notification_dispatch_authorizations "
+                "authorized_at_utc, evidence_valid_until_utc "
+                "FROM notification_dispatch_authorizations "
                 "WHERE outbox_id=? ORDER BY lease_generation DESC LIMIT 1",
                 (outbox_id,),
             ).fetchone()
@@ -2074,6 +2118,7 @@ class Store:
                     "revision_id",
                     "lifecycle_event_id",
                     "authorized_at_utc",
+                    "evidence_valid_until_utc",
                 ),
                 row,
                 strict=True,

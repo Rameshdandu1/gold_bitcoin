@@ -114,6 +114,19 @@ class ResearchStore:
                     PRIMARY KEY (experiment_id, opportunity_id, revision_id, arm),
                     FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
                 );
+                CREATE TABLE IF NOT EXISTS research_outcome_revisions (
+                    experiment_id TEXT NOT NULL,
+                    opportunity_id TEXT NOT NULL,
+                    revision_id TEXT NOT NULL,
+                    arm TEXT NOT NULL,
+                    evaluation_version TEXT NOT NULL,
+                    outcome_json TEXT NOT NULL,
+                    persisted_at_utc TEXT NOT NULL,
+                    PRIMARY KEY (
+                        experiment_id, opportunity_id, revision_id, arm, evaluation_version
+                    ),
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
+                );
                 CREATE TABLE IF NOT EXISTS engine_evaluations (
                     experiment_id TEXT NOT NULL,
                     engine TEXT NOT NULL,
@@ -202,6 +215,18 @@ class ResearchStore:
                 return False
         return True
 
+    def holdout_is_open(self, experiment_id: str, config_hash: str) -> bool:
+        with _connect(self.path) as db:
+            row = db.execute(
+                "SELECT config_hash, purpose FROM holdout_access_events WHERE experiment_id=?",
+                (experiment_id,),
+            ).fetchone()
+        return bool(
+            row is not None
+            and row["config_hash"] == config_hash
+            and row["purpose"] == "FINAL_EVALUATION"
+        )
+
     def experiments(self, *, limit: int = 50, offset: int = 0) -> list[dict]:
         limit = min(max(limit, 1), 200)
         offset = max(offset, 0)
@@ -260,16 +285,9 @@ class ResearchStore:
         if experiment is None:
             return None
         manifest, config = experiment
+        visible = self.opportunities(experiment_id)
+        holdout_opened = self.holdout_is_open(experiment_id, config.canonical_config_hash())
         with _connect(self.path) as db:
-            counts = db.execute(
-                "SELECT "
-                "(SELECT COUNT(*) FROM research_candidates WHERE experiment_id=?) AS candidates, "
-                "(SELECT COUNT(DISTINCT opportunity_id) FROM opportunities "
-                " WHERE experiment_id=?) AS opportunities, "
-                "(SELECT COUNT(*) FROM research_outcomes WHERE experiment_id=?) AS outcomes, "
-                "(SELECT COUNT(*) FROM arm_decisions WHERE experiment_id=?) AS decisions",
-                (experiment_id, experiment_id, experiment_id, experiment_id),
-            ).fetchone()
             actions = db.execute(
                 "SELECT scope, external_calls, real_notifications, orders, measured_at_utc "
                 "FROM experiment_action_counts WHERE experiment_id=?",
@@ -285,7 +303,19 @@ class ResearchStore:
             "manifest": manifest.model_dump(mode="json"),
             "config": config.model_dump(mode="json"),
             "config_hash": config.canonical_config_hash(),
-            "counts": dict(counts),
+            "holdout_state": (
+                "NO_HOLDOUT"
+                if config.holdout_start_utc is None
+                else "HOLDOUT_OPENED"
+                if holdout_opened
+                else "HOLDOUT_PROTECTED"
+            ),
+            "counts": {
+                "candidates": len(visible),
+                "opportunities": len({row.opportunity_id for row in visible}),
+                "outcomes": sum(arm.outcome is not None for row in visible for arm in row.arms),
+                "decisions": sum(len(row.arms) for row in visible),
+            },
             "engine_matrix": self.engine_matrix(experiment_id),
             "reports": [
                 {
@@ -303,13 +333,8 @@ class ResearchStore:
     ) -> list[dict]:
         limit = min(max(limit, 1), 200)
         offset = max(offset, 0)
-        with _connect(self.path) as db:
-            rows = db.execute(
-                "SELECT record_json FROM opportunities WHERE experiment_id=? "
-                "ORDER BY opportunity_id, revision_id LIMIT ? OFFSET ?",
-                (experiment_id, limit, offset),
-            ).fetchall()
-        return [json.loads(row["record_json"]) for row in rows]
+        rows = self.opportunities(experiment_id)
+        return [row.model_dump(mode="json") for row in rows[offset : offset + limit]]
 
     def save_observations(self, experiment_id: str, observations: list[ReplayObservation]) -> None:
         with _connect(self.path) as db:
@@ -477,32 +502,39 @@ class ResearchStore:
         revision_id: str,
         outcome: ResearchOutcome,
         *,
-        evaluation_version: str = "phase5-outcome-v1",
+        evaluation_version: str = "phase6-outcome-v1",
         persisted_at: datetime | None = None,
     ) -> bool:
         payload = outcome.model_dump_json()
         with _connect(self.path) as db:
             cursor = db.execute(
-                "INSERT OR IGNORE INTO research_outcomes VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO research_outcome_revisions "
+                "(experiment_id, opportunity_id, revision_id, arm, evaluation_version, "
+                "outcome_json, persisted_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     experiment_id,
                     outcome.opportunity_id,
                     revision_id,
                     outcome.arm,
-                    payload,
                     evaluation_version,
+                    payload,
                     (persisted_at or datetime.now(UTC)).isoformat(),
                 ),
             )
             if cursor.rowcount == 0:
                 existing = db.execute(
-                    "SELECT outcome_json, evaluation_version FROM research_outcomes "
-                    "WHERE experiment_id=? AND opportunity_id=? AND revision_id=? AND arm=?",
-                    (experiment_id, outcome.opportunity_id, revision_id, outcome.arm),
+                    "SELECT outcome_json FROM research_outcome_revisions "
+                    "WHERE experiment_id=? AND opportunity_id=? AND revision_id=? AND arm=? "
+                    "AND evaluation_version=?",
+                    (
+                        experiment_id,
+                        outcome.opportunity_id,
+                        revision_id,
+                        outcome.arm,
+                        evaluation_version,
+                    ),
                 ).fetchone()
-                if existing["outcome_json"] != payload or existing["evaluation_version"] != (
-                    evaluation_version
-                ):
+                if existing["outcome_json"] != payload:
                     raise ValueError("Research outcome identity is immutable")
                 return False
         return True
@@ -512,13 +544,21 @@ class ResearchStore:
     ) -> dict[str, ResearchOutcome]:
         with _connect(self.path) as db:
             rows = db.execute(
-                "SELECT arm, outcome_json FROM research_outcomes WHERE experiment_id=? "
-                "AND opportunity_id=? AND revision_id=?",
+                "SELECT arm, outcome_json FROM research_outcome_revisions WHERE experiment_id=? "
+                "AND opportunity_id=? AND revision_id=? "
+                "ORDER BY evaluation_version DESC",
                 (experiment_id, opportunity_id, revision_id),
             ).fetchall()
-        return {
-            row["arm"]: ResearchOutcome.model_validate_json(row["outcome_json"]) for row in rows
-        }
+            if not rows:
+                rows = db.execute(
+                    "SELECT arm, outcome_json FROM research_outcomes WHERE experiment_id=? "
+                    "AND opportunity_id=? AND revision_id=?",
+                    (experiment_id, opportunity_id, revision_id),
+                ).fetchall()
+        result: dict[str, ResearchOutcome] = {}
+        for row in rows:
+            result.setdefault(row["arm"], ResearchOutcome.model_validate_json(row["outcome_json"]))
+        return result
 
     def quotes(
         self, experiment_id: str, symbol: str, *, opportunity_id: str | None = None
@@ -533,6 +573,7 @@ class ResearchStore:
             payload.setdefault("venue", row.venue)
             payload.setdefault("symbol", row.symbol)
             payload.setdefault("observed_at_utc", row.exchange_time_utc)
+            payload.setdefault("available_at_utc", row.available_at_utc)
             result.append(ExecutableQuote.model_validate(payload))
         return result
 
@@ -575,14 +616,33 @@ class ResearchStore:
                 if existing["record_json"] != payload:
                     raise ValueError("Opportunity revision identity is immutable")
 
-    def opportunities(self, experiment_id: str) -> list[OpportunityRecord]:
+    def opportunities(
+        self, experiment_id: str, *, include_protected: bool = False
+    ) -> list[OpportunityRecord]:
+        experiment = self.experiment(experiment_id)
+        if experiment is None:
+            return []
+        _, config = experiment
+        if (
+            include_protected
+            and config.holdout_start_utc is not None
+            and not self.holdout_is_open(experiment_id, config.canonical_config_hash())
+        ):
+            raise ValueError("Protected holdout has not been explicitly opened")
         with _connect(self.path) as db:
             rows = db.execute(
                 "SELECT record_json FROM opportunities WHERE experiment_id=? "
                 "ORDER BY opportunity_id, revision_id",
                 (experiment_id,),
             ).fetchall()
-        return [OpportunityRecord.model_validate_json(row["record_json"]) for row in rows]
+        records = [OpportunityRecord.model_validate_json(row["record_json"]) for row in rows]
+        if (
+            config.holdout_start_utc is None
+            or include_protected
+            or self.holdout_is_open(experiment_id, config.canonical_config_hash())
+        ):
+            return records
+        return [row for row in records if row.label_information_end_utc < config.holdout_start_utc]
 
     def save_report(self, experiment_id: str, name: str, report: dict) -> None:
         payload = json.dumps(report, sort_keys=True, separators=(",", ":"))
@@ -609,9 +669,11 @@ class ResearchStore:
                 "ORDER BY created_at_utc DESC LIMIT 1"
             ).fetchone()
             reports = db.execute("SELECT COUNT(*) AS count FROM reports").fetchone()["count"]
-            opportunities = db.execute("SELECT COUNT(*) AS count FROM opportunities").fetchone()[
-                "count"
+            experiment_ids = [
+                row["experiment_id"]
+                for row in db.execute("SELECT experiment_id FROM experiments").fetchall()
             ]
+        opportunities = sum(len(self.opportunities(value)) for value in experiment_ids)
         status = (
             "NOT_STARTED"
             if not experiments
@@ -698,6 +760,8 @@ class PaperLedger:
                     generation INTEGER NOT NULL,
                     cursor INTEGER NOT NULL,
                     source_size INTEGER NOT NULL,
+                    prefix_digest TEXT NOT NULL
+                        DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
                     updated_at_utc TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS paper_events (
@@ -711,6 +775,97 @@ class PaperLedger:
                 );
                 """
             )
+            cursor_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(paper_cursor_bindings)")
+            }
+            if "prefix_digest" not in cursor_columns:
+                db.execute(
+                    "ALTER TABLE paper_cursor_bindings ADD COLUMN prefix_digest TEXT NOT NULL "
+                    "DEFAULT '0000000000000000000000000000000000000000000000000000000000000000'"
+                )
+
+    @staticmethod
+    def _record_decision_in_transaction(
+        db: sqlite3.Connection,
+        opportunity_id: str,
+        revision_id: str,
+        decision: ArmDecision,
+        *,
+        candidate: ResearchCandidate,
+        config_hash: str,
+        target_index: int,
+        source_identity: str,
+        evidence_mode: str,
+        entry_latency_ms: int,
+        recorded_at: datetime,
+    ) -> bool:
+        if candidate.opportunity_id != opportunity_id or candidate.revision_id != revision_id:
+            raise ValueError("Paper candidate identity does not match decision key")
+        if target_index < 1 or target_index > len(candidate.targets):
+            raise ValueError("Paper target identity is not present on candidate revision")
+        if evidence_mode not in {"PROSPECTIVE", "HISTORICAL_IMPORT", "SIMULATED_PROSPECTIVE"}:
+            raise ValueError("Paper evidence mode must be explicit")
+        if len(config_hash) != 64 or any(char not in "0123456789abcdef" for char in config_hash):
+            raise ValueError("Paper configuration hash must be canonical SHA-256")
+        if not source_identity:
+            raise ValueError("Paper source identity is required")
+        eligible_entry_after = decision.ready_at_utc + timedelta(milliseconds=entry_latency_ms)
+        payload = decision.model_dump_json()
+        evidence = (
+            candidate.model_dump_json(),
+            config_hash,
+            target_index,
+            evidence_mode,
+            source_identity,
+            eligible_entry_after.isoformat(),
+        )
+        existing = db.execute(
+            "SELECT decision_json FROM paper_decisions WHERE opportunity_id=? "
+            "AND revision_id=? AND arm=?",
+            (opportunity_id, revision_id, decision.arm),
+        ).fetchone()
+        if existing is not None:
+            if existing["decision_json"] != payload:
+                raise ValueError("Prospective decision is immutable")
+            existing_evidence = db.execute(
+                "SELECT candidate_json, config_hash, target_index, evidence_mode, "
+                "source_identity, eligible_entry_after_utc FROM paper_decision_evidence "
+                "WHERE opportunity_id=? AND revision_id=? AND arm=?",
+                (opportunity_id, revision_id, decision.arm),
+            ).fetchone()
+            if existing_evidence is None or tuple(existing_evidence) != evidence:
+                raise ValueError("Prospective decision evidence is immutable")
+            return False
+        if decision.ready_at_utc > recorded_at:
+            raise ValueError("Cannot prospectively record a future decision")
+        if evidence_mode in {"PROSPECTIVE", "SIMULATED_PROSPECTIVE"} and (
+            recorded_at > eligible_entry_after or recorded_at >= candidate.expires_at_utc
+        ):
+            raise ValueError("Prospective decision must be persisted before eligible entry")
+        db.execute(
+            "INSERT INTO paper_decisions VALUES (?, ?, ?, ?, ?, NULL, NULL)",
+            (opportunity_id, revision_id, decision.arm, payload, recorded_at.isoformat()),
+        )
+        db.execute(
+            "INSERT INTO paper_decision_evidence VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (opportunity_id, revision_id, decision.arm, *evidence),
+        )
+        event_id = hashlib.sha256(
+            f"{opportunity_id}|{revision_id}|{decision.arm}|DECIDED".encode()
+        ).hexdigest()
+        db.execute(
+            "INSERT INTO paper_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                event_id,
+                opportunity_id,
+                revision_id,
+                decision.arm,
+                "DECIDED",
+                recorded_at.isoformat(),
+                payload,
+            ),
+        )
+        return True
 
     def record_decision(
         self,
@@ -726,159 +881,174 @@ class PaperLedger:
         entry_latency_ms: int = 0,
         recorded_at: datetime | None = None,
     ) -> bool:
-        recorded_at = recorded_at or datetime.now(UTC)
-        if decision.ready_at_utc > recorded_at:
-            raise ValueError("Cannot prospectively record a future decision")
-        if candidate.opportunity_id != opportunity_id or candidate.revision_id != revision_id:
-            raise ValueError("Paper candidate identity does not match decision key")
-        if target_index < 1 or target_index > len(candidate.targets):
-            raise ValueError("Paper target identity is not present on candidate revision")
-        if evidence_mode not in {"PROSPECTIVE", "HISTORICAL_IMPORT"}:
-            raise ValueError("Paper evidence mode must be explicit")
-        if len(config_hash) != 64 or any(char not in "0123456789abcdef" for char in config_hash):
-            raise ValueError("Paper configuration hash must be canonical SHA-256")
-        if not source_identity:
-            raise ValueError("Paper source identity is required")
-        eligible_entry_after = decision.ready_at_utc + timedelta(milliseconds=entry_latency_ms)
-        if evidence_mode == "PROSPECTIVE" and (
-            recorded_at > eligible_entry_after or recorded_at >= candidate.expires_at_utc
-        ):
-            raise ValueError("Prospective decision must be persisted before eligible entry")
-        payload = decision.model_dump_json()
-        evidence = (
-            candidate.model_dump_json(),
-            config_hash,
-            target_index,
-            evidence_mode,
-            source_identity,
-            eligible_entry_after.isoformat(),
-        )
         with _connect(self.path) as db:
             db.execute("BEGIN IMMEDIATE")
-            cursor = db.execute(
-                "INSERT OR IGNORE INTO paper_decisions VALUES (?, ?, ?, ?, ?, NULL, NULL)",
-                (opportunity_id, revision_id, decision.arm, payload, recorded_at.isoformat()),
+            return self._record_decision_in_transaction(
+                db,
+                opportunity_id,
+                revision_id,
+                decision,
+                candidate=candidate,
+                config_hash=config_hash,
+                target_index=target_index,
+                source_identity=source_identity,
+                evidence_mode=evidence_mode,
+                entry_latency_ms=entry_latency_ms,
+                recorded_at=recorded_at or datetime.now(UTC),
             )
-            if cursor.rowcount == 0:
-                existing = db.execute(
-                    "SELECT decision_json FROM paper_decisions WHERE opportunity_id=? "
-                    "AND revision_id=? AND arm=?",
-                    (opportunity_id, revision_id, decision.arm),
-                ).fetchone()
-                if existing["decision_json"] != payload:
-                    raise ValueError("Prospective decision is immutable")
-                existing_evidence = db.execute(
-                    "SELECT candidate_json, config_hash, target_index, evidence_mode, "
-                    "source_identity, eligible_entry_after_utc FROM paper_decision_evidence "
-                    "WHERE opportunity_id=? AND revision_id=? AND arm=?",
-                    (opportunity_id, revision_id, decision.arm),
-                ).fetchone()
-                if existing_evidence is None or tuple(existing_evidence) != evidence:
-                    raise ValueError("Prospective decision evidence is immutable")
-                return False
-            db.execute(
-                "INSERT INTO paper_decision_evidence VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    opportunity_id,
-                    revision_id,
-                    decision.arm,
-                    *evidence,
-                ),
-            )
-            event_id = hashlib.sha256(
-                f"{opportunity_id}|{revision_id}|{decision.arm}|DECIDED".encode()
-            ).hexdigest()
-            db.execute(
-                "INSERT INTO paper_events VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    event_id,
-                    opportunity_id,
-                    revision_id,
-                    decision.arm,
-                    "DECIDED",
-                    recorded_at.isoformat(),
-                    payload,
-                ),
-            )
+
+    @classmethod
+    def _record_outcome_in_transaction(
+        cls,
+        db: sqlite3.Connection,
+        revision_id: str,
+        outcome: ResearchOutcome,
+        *,
+        recorded_at: datetime,
+    ) -> bool:
+        if outcome.code not in cls.TERMINAL:
+            raise ValueError("Outcome is not terminal")
+        row = db.execute(
+            "SELECT d.recorded_at_utc, d.outcome_json, d.decision_json, "
+            "e.candidate_json, e.target_index, e.evidence_mode, "
+            "e.eligible_entry_after_utc FROM paper_decisions d "
+            "JOIN paper_decision_evidence e USING (opportunity_id, revision_id, arm) "
+            "WHERE d.opportunity_id=? AND d.revision_id=? AND d.arm=?",
+            (outcome.opportunity_id, revision_id, outcome.arm),
+        ).fetchone()
+        if row is None:
+            raise ValueError("A prospective decision must be recorded before its outcome")
+        payload = outcome.model_dump_json()
+        if row["outcome_json"] is not None:
+            if row["outcome_json"] != payload:
+                raise ValueError("Paper outcome is immutable")
+            return False
+        if recorded_at < datetime.fromisoformat(row["recorded_at_utc"]):
+            raise ValueError("Outcome cannot predate decision persistence")
+        decision = ArmDecision.model_validate_json(row["decision_json"])
+        candidate = ResearchCandidate.model_validate_json(row["candidate_json"])
+        if outcome.target_index != int(row["target_index"]):
+            raise ValueError("Paper outcome target differs from frozen target identity")
+        if outcome.decision_ready_at_utc != decision.ready_at_utc:
+            raise ValueError("Paper outcome does not match frozen decision readiness")
+        if decision.state != "APPROVED" and outcome.code not in {"NO_ENTRY", "INCOMPLETE"}:
+            raise ValueError("Non-approved paper arm cannot receive an executed outcome")
+        if row["evidence_mode"] in {"PROSPECTIVE", "SIMULATED_PROSPECTIVE"}:
+            persisted = datetime.fromisoformat(row["recorded_at_utc"])
+            eligible = datetime.fromisoformat(row["eligible_entry_after_utc"])
+            if outcome.entry_at_utc is not None and recorded_at < outcome.entry_at_utc:
+                raise ValueError("Paper entry is not yet factually available")
+            if outcome.exit_at_utc is not None and recorded_at < outcome.exit_at_utc:
+                raise ValueError("Paper outcome is not yet factually available")
+            if outcome.entry_at_utc is not None and (
+                outcome.entry_at_utc <= persisted or outcome.entry_at_utc < eligible
+            ):
+                raise ValueError("Paper entry does not prove write-before-entry chronology")
+            if outcome.exit_at_utc is not None and outcome.exit_at_utc <= persisted:
+                raise ValueError("Paper outcome predates prospective persistence")
+            if outcome.entry_at_utc is not None and outcome.entry_at_utc < (
+                candidate.observed_at_utc
+            ):
+                raise ValueError("Paper entry predates candidate observation")
+        db.execute(
+            "UPDATE paper_decisions SET outcome_json=?, outcome_recorded_at_utc=? "
+            "WHERE opportunity_id=? AND revision_id=? AND arm=?",
+            (
+                payload,
+                recorded_at.isoformat(),
+                outcome.opportunity_id,
+                revision_id,
+                outcome.arm,
+            ),
+        )
+        event_id = hashlib.sha256(
+            (f"{outcome.opportunity_id}|{revision_id}|{outcome.arm}|{outcome.code}").encode()
+        ).hexdigest()
+        db.execute(
+            "INSERT INTO paper_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                event_id,
+                outcome.opportunity_id,
+                revision_id,
+                outcome.arm,
+                outcome.code,
+                recorded_at.isoformat(),
+                payload,
+            ),
+        )
         return True
 
     def record_outcome(
         self, revision_id: str, outcome: ResearchOutcome, *, recorded_at: datetime | None = None
     ) -> bool:
-        if outcome.code not in self.TERMINAL:
-            raise ValueError("Outcome is not terminal")
-        recorded_at = recorded_at or datetime.now(UTC)
         with _connect(self.path) as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT d.recorded_at_utc, d.outcome_json, d.decision_json, "
-                "e.candidate_json, e.target_index, e.evidence_mode, "
-                "e.eligible_entry_after_utc FROM paper_decisions d "
-                "JOIN paper_decision_evidence e USING (opportunity_id, revision_id, arm) "
-                "WHERE d.opportunity_id=? AND d.revision_id=? AND d.arm=?",
-                (outcome.opportunity_id, revision_id, outcome.arm),
-            ).fetchone()
-            if row is None:
-                raise ValueError("A prospective decision must be recorded before its outcome")
-            if recorded_at < datetime.fromisoformat(row["recorded_at_utc"]):
-                raise ValueError("Outcome cannot predate decision persistence")
-            decision = ArmDecision.model_validate_json(row["decision_json"])
-            candidate = ResearchCandidate.model_validate_json(row["candidate_json"])
-            if outcome.target_index != int(row["target_index"]):
-                raise ValueError("Paper outcome target differs from frozen target identity")
-            if outcome.decision_ready_at_utc != decision.ready_at_utc:
-                raise ValueError("Paper outcome does not match frozen decision readiness")
-            if decision.state != "APPROVED" and outcome.code not in {"NO_ENTRY", "INCOMPLETE"}:
-                raise ValueError("Non-approved paper arm cannot receive an executed outcome")
-            if row["evidence_mode"] == "PROSPECTIVE":
-                persisted = datetime.fromisoformat(row["recorded_at_utc"])
-                eligible = datetime.fromisoformat(row["eligible_entry_after_utc"])
-                if outcome.entry_at_utc is not None and recorded_at < outcome.entry_at_utc:
-                    raise ValueError("Paper entry is not yet factually available")
-                if outcome.exit_at_utc is not None and recorded_at < outcome.exit_at_utc:
-                    raise ValueError("Paper outcome is not yet factually available")
-                if outcome.entry_at_utc is not None and (
-                    outcome.entry_at_utc <= persisted or outcome.entry_at_utc < eligible
-                ):
-                    raise ValueError("Paper entry does not prove write-before-entry chronology")
-                if outcome.exit_at_utc is not None and outcome.exit_at_utc <= persisted:
-                    raise ValueError("Paper outcome predates prospective persistence")
-                if outcome.entry_at_utc is not None and outcome.entry_at_utc < (
-                    candidate.observed_at_utc
-                ):
-                    raise ValueError("Paper entry predates candidate observation")
-            payload = outcome.model_dump_json()
-            if row["outcome_json"] is not None:
-                if row["outcome_json"] != payload:
-                    raise ValueError("Paper outcome is immutable")
-                return False
-            db.execute(
-                "UPDATE paper_decisions SET outcome_json=?, outcome_recorded_at_utc=? "
-                "WHERE opportunity_id=? AND revision_id=? AND arm=?",
-                (
-                    payload,
-                    recorded_at.isoformat(),
-                    outcome.opportunity_id,
-                    revision_id,
-                    outcome.arm,
-                ),
+            return self._record_outcome_in_transaction(
+                db,
+                revision_id,
+                outcome,
+                recorded_at=recorded_at or datetime.now(UTC),
             )
-            event_id = hashlib.sha256(
-                (f"{outcome.opportunity_id}|{revision_id}|{outcome.arm}|{outcome.code}").encode()
-            ).hexdigest()
-            db.execute(
-                "INSERT INTO paper_events VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    event_id,
-                    outcome.opportunity_id,
-                    revision_id,
-                    outcome.arm,
-                    outcome.code,
-                    recorded_at.isoformat(),
-                    payload,
-                ),
-            )
-        return True
+
+    @staticmethod
+    def _bind_cursor_in_transaction(
+        db: sqlite3.Connection,
+        source: str,
+        *,
+        source_identity: str,
+        generation: int,
+        cursor: int,
+        source_size: int,
+        prefix_digest: str,
+        now: datetime,
+        expected_previous_cursor: int | None = None,
+        expected_previous_prefix_digest: str | None = None,
+    ) -> None:
+        if generation < 1 or cursor < 0 or source_size < cursor:
+            raise ValueError("Invalid paper cursor/generation/source size")
+        if len(prefix_digest) != 64 or any(x not in "0123456789abcdef" for x in prefix_digest):
+            raise ValueError("Paper prefix digest must be canonical SHA-256")
+        existing = db.execute(
+            "SELECT source_identity, generation, cursor, source_size, prefix_digest "
+            "FROM paper_cursor_bindings WHERE source=?",
+            (source,),
+        ).fetchone()
+        if existing is not None:
+            if (
+                existing["source_identity"] != source_identity
+                or int(existing["generation"]) != generation
+            ):
+                raise ValueError("Paper source identity/generation changed")
+            prior_cursor = int(existing["cursor"])
+            prior_digest = str(existing["prefix_digest"])
+            if source_size < int(existing["source_size"]) or cursor < prior_cursor:
+                raise ValueError("Paper source was truncated or cursor moved backward")
+            if expected_previous_cursor is not None and prior_cursor != expected_previous_cursor:
+                raise ValueError("Paper cursor changed during event commit")
+            if (
+                expected_previous_prefix_digest is not None
+                and prior_digest != expected_previous_prefix_digest
+            ):
+                raise ValueError("Paper source prefix changed during event commit")
+            if cursor == prior_cursor and prior_digest != prefix_digest:
+                raise ValueError("Paper source content changed before committed cursor")
+        db.execute(
+            "INSERT INTO paper_cursor_bindings "
+            "(source, source_identity, generation, cursor, source_size, prefix_digest, "
+            "updated_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(source) DO UPDATE SET cursor=excluded.cursor, "
+            "source_size=excluded.source_size, prefix_digest=excluded.prefix_digest, "
+            "updated_at_utc=excluded.updated_at_utc",
+            (
+                source,
+                source_identity,
+                generation,
+                cursor,
+                source_size,
+                prefix_digest,
+                now.isoformat(),
+            ),
+        )
 
     def bind_cursor(
         self,
@@ -888,42 +1058,82 @@ class PaperLedger:
         generation: int,
         cursor: int,
         source_size: int,
+        prefix_digest: str = "0" * 64,
         now: datetime | None = None,
     ) -> None:
-        if generation < 1 or cursor < 0 or source_size < cursor:
-            raise ValueError("Invalid paper cursor/generation/source size")
         with _connect(self.path) as db:
-            existing = db.execute(
-                "SELECT source_identity, generation, cursor, source_size "
-                "FROM paper_cursor_bindings WHERE source=?",
-                (source,),
-            ).fetchone()
-            if existing is not None:
-                if (
-                    existing["source_identity"] != source_identity
-                    or int(existing["generation"]) != generation
-                ):
-                    raise ValueError("Paper source identity/generation changed")
-                if source_size < int(existing["source_size"]) or cursor < int(existing["cursor"]):
-                    raise ValueError("Paper source was truncated or cursor moved backward")
-            db.execute(
-                "INSERT INTO paper_cursor_bindings VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(source) DO UPDATE SET cursor=excluded.cursor, "
-                "source_size=excluded.source_size, updated_at_utc=excluded.updated_at_utc",
-                (
-                    source,
-                    source_identity,
-                    generation,
-                    cursor,
-                    source_size,
-                    (now or datetime.now(UTC)).isoformat(),
-                ),
+            db.execute("BEGIN IMMEDIATE")
+            self._bind_cursor_in_transaction(
+                db,
+                source,
+                source_identity=source_identity,
+                generation=generation,
+                cursor=cursor,
+                source_size=source_size,
+                prefix_digest=prefix_digest,
+                now=now or datetime.now(UTC),
             )
+
+    def process_stream_event(
+        self,
+        payload: dict,
+        *,
+        source: str,
+        source_identity: str,
+        generation: int,
+        previous_cursor: int,
+        cursor: int,
+        source_size: int,
+        previous_prefix_digest: str,
+        prefix_digest: str,
+        recorded_at: datetime,
+    ) -> str:
+        """Persist one immutable paper event and its input cursor in one transaction."""
+        with _connect(self.path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            kind = payload.get("type", "DECISION")
+            if kind == "DECISION":
+                self._record_decision_in_transaction(
+                    db,
+                    payload["opportunity_id"],
+                    payload["revision_id"],
+                    ArmDecision.model_validate(payload["decision"]),
+                    candidate=ResearchCandidate.model_validate(payload["candidate"]),
+                    config_hash=payload["config_hash"],
+                    target_index=int(payload["target_index"]),
+                    source_identity=source_identity,
+                    evidence_mode=payload.get("evidence_mode", "PROSPECTIVE"),
+                    entry_latency_ms=int(payload.get("entry_latency_ms", 0)),
+                    recorded_at=recorded_at,
+                )
+            elif kind == "OUTCOME":
+                self._record_outcome_in_transaction(
+                    db,
+                    payload["revision_id"],
+                    ResearchOutcome.model_validate(payload["outcome"]),
+                    recorded_at=recorded_at,
+                )
+            else:
+                raise ValueError(f"Unsupported paper stream event type: {kind}")
+            self._bind_cursor_in_transaction(
+                db,
+                source,
+                source_identity=source_identity,
+                generation=generation,
+                cursor=cursor,
+                source_size=source_size,
+                prefix_digest=prefix_digest,
+                now=recorded_at,
+                expected_previous_cursor=previous_cursor,
+                expected_previous_prefix_digest=previous_prefix_digest,
+            )
+        return kind
 
     def cursor_binding(self, source: str) -> dict | None:
         with _connect(self.path) as db:
             row = db.execute(
-                "SELECT source_identity, generation, cursor, source_size, updated_at_utc "
+                "SELECT source_identity, generation, cursor, source_size, prefix_digest, "
+                "updated_at_utc "
                 "FROM paper_cursor_bindings WHERE source=?",
                 (source,),
             ).fetchone()
@@ -971,7 +1181,10 @@ class PaperLedger:
             "outcomes": outcomes,
             "explicit_gaps": gaps,
             "evidence_modes": {row["evidence_mode"]: row["count"] for row in modes},
-            "warning": "Prospective paper observation only; no orders are supported.",
+            "warning": (
+                "Hypothetical paper observations only; evidence modes distinguish simulated, "
+                "prospective and imported records. No orders are supported."
+            ),
         }
 
     def transitions(self, *, limit: int = 100, offset: int = 0) -> list[dict]:
