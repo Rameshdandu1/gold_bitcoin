@@ -8,12 +8,22 @@
 - [ ] GitHub repository created and CI run on GitHub (external operator action)
 
 ## Phase 1 — trustworthy market data (before any live signals)
-1. Resolve BTC and gold instruments by `/v2/products`, validate active contract state, quote/underlying/base units. Add fixtures for India API responses and symbols missing/delisted.
-2. Persist **raw** trade + order-book snapshots and incremental changes in an append-only, partitioned schema. Store event_time, receive_time, publish_time, channel, exchange and checksum.
-3. Implement `ob_updates` snapshot, sequence continuity, checksum verification, resync and proper replay. Test dropped packet, duplicate, out-of-order, reconnect, crossed book, zero size deletion and stale snapshot.
-4. Reconcile REST 1m candles with streamed trade aggregation, identify finalized candles reliably across server clock/time sync and outages.
-5. Implement contract-size normalization: delta contracts != USD, buyer_role r=t -> aggressive buy, r=m -> aggressive sell; tests against documentation fixture.
-6. Archive source API status/errors, backoff and cooldown; rate limits as configured, no busy polling.
+- [x] Resolve BTC and gold instruments by `/v2/products`, validate active contract state,
+  quote/underlying/base units. Add fixtures for India API responses and symbols missing/delisted.
+- [x] Persist **raw** trade + order-book snapshots and incremental changes in an append-only,
+  logical UTC-day-partitioned schema. Store event time, receive time, publish time, channel,
+  exchange and checksum.
+- [x] Implement `ob_updates` snapshot, sequence continuity, checksum verification, resync and
+  deterministic replay. Test dropped packet, duplicate, out-of-order, reconnect, crossed book,
+  zero-size deletion and stale snapshot.
+- [x] Reconcile REST 1m candles with streamed trade aggregation, identify finalized candles
+  reliably across server clock/time sync and outages. The worker persists `WAIT`/`VALID`/`INVALID`
+  reconciliation status; a longer live outage/clock-drift soak remains an operational acceptance
+  item before M1 is declared production-ready.
+- [x] Implement contract-size normalization: Delta contracts != USD, buyer role `r=t` -> aggressive
+  buy, `r=m` -> aggressive sell; tests use documentation-derived fixtures.
+- [x] Archive source API status/errors, bounded REST retry/cooldown and WebSocket backoff; no busy
+  polling. Production rate/retention tuning remains operational work.
 
 ## Phase 2 — six purpose-built engines
 7. Deterministic 1m/3m sweep/reclaim and follow-through for FAST, 5m/15m breakout+retest for HOURLY, higher-TF BOS/CHOCH and session levels for SESSION.
