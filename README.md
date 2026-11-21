@@ -4,6 +4,12 @@
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
+**Review status (2026-11-21):** Phase 2 is merged and its 126-test baseline passes. The
+[independent review](docs/audits/phase-2-independent-review.md) reproduced correctness gaps in
+session coverage, price invalidation, structure-event identity, availability and current-state
+presentation. Phase 3 starts with those corrections, then adds the dual-provider service; see
+[CODEX_PHASE_3.md](prompts/CODEX_PHASE_3.md). These are instructions and findings, not completed fixes.
+
 ## What is already implemented in this starter
 - FastAPI read-only health, engine, candidate, revision, lifecycle and feature-snapshot endpoints;
   authenticated production deployment remains operator work.
@@ -20,7 +26,9 @@
   contiguous candles and combine confirmed market structure, liquidity sweeps or breakout/retests,
   executed-trade flow, validated order-book state, ATR, UTC-day candle-volume VWAP proxy, relative volume and
   volatility expansion. Outputs remain research `CANDIDATE` events, never trade confirmations.
-- Independent typed GPT/Claude adapters, frozen snapshot ID, strict two-provider consensus and fail-closed validation; calls are OFF by default.
+- Typed GPT/Claude adapter and consensus scaffolding; Phase 3 must harden canonical input,
+  revision identity, provider metadata, deadlines, budgets and current-market checks. Calls are OFF
+  by default, and Phase 2 quantitative engines do not invoke these adapters.
 - SQLite audit store with duplicate-safe immutable candidate revisions, append-only lifecycle events,
   consensus records and health/data staleness states.
 - Optional entitlement-gated CoinGlass V4 BTC open-interest and last-closed funding context. The
@@ -133,11 +141,13 @@ references are in [DESIGN.md](DESIGN.md),
 [ADR 0001](docs/adr/0001-delta-event-journal-and-book-integrity.md),
 [ADR 0002](docs/adr/0002-deterministic-six-engine-signals.md), [the API guide](docs/API.md),
 [the Phase 2 verification report](docs/audits/phase-2-verification.md),
+[the independent Phase 2 review](docs/audits/phase-2-independent-review.md),
 [the security policy](docs/SECURITY.md), and
 [the Windows runbook](docs/WINDOWS_DEPLOYMENT.md); the ordered backlog is the
 [implementation plan](docs/IMPLEMENTATION_PLAN.md). Contributors and coding agents should start
 with [AGENTS.md](AGENTS.md), [CODEX_START_HERE.md](prompts/CODEX_START_HERE.md), and
-[CODEX_TASK.md](prompts/CODEX_TASK.md), and [CODEX_PHASE_2.md](prompts/CODEX_PHASE_2.md). Release history is recorded in
+[CODEX_TASK.md](prompts/CODEX_TASK.md), [CODEX_PHASE_2.md](prompts/CODEX_PHASE_2.md), and
+[CODEX_PHASE_3.md](prompts/CODEX_PHASE_3.md). Release history is recorded in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## Run quality checks

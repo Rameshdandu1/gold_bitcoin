@@ -39,18 +39,42 @@
   `UNAVAILABLE`, `WAIT`, `WATCH`, `CANDIDATE`, `REJECTED`, `INVALIDATED` and `EXPIRED`; persist
   immutable revisions and append-only lifecycle events.
 
-Phase 2 automated acceptance covers all six configurations independently, bullish/bearish inputs,
+The existing Phase 2 automated suite exercises all six configurations independently, bullish/bearish inputs,
 false breakouts, missing/stale/corrupt data, duplicate suppression, expiry/invalidation and
 point-in-time replay with explicit candle availability plus trade/book event and receive clocks. It
 does not establish live signal accuracy, profitability or
 provider availability. CoinGlass subscription calls and a licensed Gold reference remain external
 operator validation items.
 
+**Independent review gate (2026-11-21):** the passing 126-test baseline does not close M2
+correctness acceptance. [The review](audits/phase-2-independent-review.md) reproduced R1–R6 and
+identified canonical/revision contracts that must be hardened before AI promotion. Phase 3A below
+owns that corrective work; completed implementation checkboxes above do not imply those findings
+are fixed.
+
 ## Phase 3 — dual-model and hardened service
+
 11. Guarded GPT and Claude structured responses with timeout, token ceilings, cached idempotence, retry caps, budget monitor, response/version audit.
 12. Independent evaluations on immutable snapshots; no chain-of-thought request; compare explicit target-index overlap, invalidation agreement and hard risk checks. Emergency WAIT if either provider fails.
 13. Auth, TLS reverse proxy, key rotation, Windows Services/Task Scheduler for restart, OS firewall, ingestion tracing and error alerts.
 14. Slack/Telegram notifications with exact trigger/target/stop/source timestamp, dedup and expiry; never transmit secrets.
+
+Implementation order and acceptance details are in [CODEX_PHASE_3.md](../prompts/CODEX_PHASE_3.md):
+
+- [ ] **3A:** fix session coverage, consumed structure events, candle availability, live price
+  invalidation, discovery admission policy and lifecycle presentation; journal REST observations
+  and define required reconciliation health.
+- [ ] **3B:** deeply immutable canonical evidence and exact bytes/digest; revision-scoped durable
+  review jobs, attempts, decisions, budgets and migrations.
+- [ ] **3C:** independent concurrent GPT/Claude structured review, actual provider metadata,
+  bounded deadlines/retries, strict validation, material-change idempotence and spend accounting.
+- [ ] **3D:** deterministic consensus plus current-price/source/lifecycle recheck; atomic decision
+  and outbox commit against the active revision.
+- [ ] **3E:** accurate authenticated API/dashboard, one complete notification channel adapter,
+  durable delivery state and Windows operation/recovery instructions.
+
+AI and outbound alerts remain disabled by default. Fixture completion, paid-provider smoke tests,
+Windows deployment and strategy-performance validation are separate evidence categories.
 
 ## Phase 4 — historical evaluation
 15. Historical market replay (event-time ordered), embargo/purged walk-forward test, no interpolation of future prices.
