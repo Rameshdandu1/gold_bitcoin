@@ -26,10 +26,25 @@
   polling. Production rate/retention tuning remains operational work.
 
 ## Phase 2 — six purpose-built engines
-7. Deterministic 1m/3m sweep/reclaim and follow-through for FAST, 5m/15m breakout+retest for HOURLY, higher-TF BOS/CHOCH and session levels for SESSION.
-8. Features: ATR, VWAP, relative volume, CVD rolling 500/5000 trades, trade-duration-normalized imbalance, absorption, stop-run/false breakout rules, near-term opposing levels.
-9. Add macro/reference gold connector; XAUT/XAU basis and data quality filter. BTC funding/OI and CoinGlass exchange support/entitlements mapping.
-10. Independent per-engine configurable target and invalidation thresholds. Distinguish `WAIT`, `WATCH`, `CANDIDATE`, `REJECT` and `EXPIRED`.
+- [x] Deterministic 1m/3m sweep/reclaim and follow-through for FAST, 5m/15m
+  breakout+retest for HOURLY, higher-TF BOS/CHOCH and session levels for SESSION.
+- [x] Features: ATR, UTC-day candle-volume VWAP proxy, relative volume, CVD rolling exact 500/5,000 trades,
+  duration-window flow, quote-notional book imbalance, absorption proxy,
+  stop-run/false-breakout rules and near-term opposing levels.
+- [x] Add a fail-closed Gold reference-provider interface and optional BTC funding/OI CoinGlass
+  context with supported coin/pair and declared-plan entitlement gates. A licensed live XAU/USD,
+  DXY, yield and economic-calendar provider is **not configured or verified**, so Gold basis/macro
+  fields remain unavailable rather than fabricated.
+- [x] Independent per-engine configurable target, stop and invalidation thresholds. Distinguish
+  `UNAVAILABLE`, `WAIT`, `WATCH`, `CANDIDATE`, `REJECTED`, `INVALIDATED` and `EXPIRED`; persist
+  immutable revisions and append-only lifecycle events.
+
+Phase 2 automated acceptance covers all six configurations independently, bullish/bearish inputs,
+false breakouts, missing/stale/corrupt data, duplicate suppression, expiry/invalidation and
+point-in-time replay with explicit candle availability plus trade/book event and receive clocks. It
+does not establish live signal accuracy, profitability or
+provider availability. CoinGlass subscription calls and a licensed Gold reference remain external
+operator validation items.
 
 ## Phase 3 — dual-model and hardened service
 11. Guarded GPT and Claude structured responses with timeout, token ceilings, cached idempotence, retry caps, budget monitor, response/version audit.

@@ -26,7 +26,11 @@ Edit only the `.env` copy. Do not use command-line flags or screenshots to paste
 .\scripts\start-worker.ps1
 ```
 
-Before enabling worker set `LIVE_INGESTION_ENABLED=true` and check configured symbols are supported by the current Delta India `/v2/products` result. Enable CoinGlass and AI separately after confirming entitlements and a bounded daily API budget. The prototype blocks confirmation on its own because flow-quality prerequisites are incomplete; an `INCOMPLETE` candidate is not a signal.
+Before enabling worker set `LIVE_INGESTION_ENABLED=true` and check configured symbols are supported
+by the current Delta India `/v2/products` result. Enable CoinGlass only after confirming the declared
+`COINGLASS_PLAN`, supported pairs, license and a bounded request budget. Phase 2 always stops after
+persisting deterministic candidates; it does not call AI, alert, or execution paths even if
+`AI_ENABLED` is set. A `CANDIDATE` is research output, not a confirmed signal.
 
 ## 3. Frontend
 
@@ -53,5 +57,7 @@ SQLite WAL is for small single-node research and audit only. Do not attempt to p
 - [ ] CoinGlass supported exchange/pair and plan permissions validated from API
 - [ ] Live snapshots and tick streams survive reconnect, drops and stale-book conditions
 - [ ] Source timestamps/closed-candle interpretation verified against exchange feed
+- [ ] Candidate invalidation/expiry verified during discovery and REST outages after service restart
+- [ ] REST candle raw-response retention decision and replay procedure approved
 - [ ] Local + GitHub CI passing; 30-day paper-trading policy decided
 - [ ] No order execution API configured, enabled or shipped

@@ -1,6 +1,9 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: Design v0.1 / research MVP. **Scope**: analysis and alerts only. **Deployment**: native Windows Server 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker optional, not required for this starter.
+**Status**: Design v0.2 / research MVP. **Scope**: deterministic analysis only in Phase 2;
+AI confirmation, alerts and order execution are disabled. **Deployment**: native Windows Server
+2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
+optional, not required for this starter.
 
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.
@@ -51,15 +54,25 @@ flowchart TD
 | BTC_HOURLY | 5m | 15m/1h | 60m | Retest/OI/flow | 0.25/0.5/0.75% |
 | BTC_SESSION | 15m | 1h/4h | 240m | Larger structure/macro | 0.25/0.5/0.75% |
 
-Target tiers and ATR projection filters are **provisional heuristics**, not learned success odds. Do not publish a live CONFIRMED call without complete quality, AI and risk gates. The MVP implements a simpler closed-candle breakout candidate; these candidates are explicitly `INCOMPLETE` and must **not** be confirmed or sent to paid AI review until live flow, source-quality and risk gates exist. Specialized sweep, derivatives and macro logic are explicit later milestones.
+Target tiers and ATR projection filters are **provisional heuristics**, not learned success odds.
+Phase 2 implements all six engine policies using confirmed pivots and HH/HL/LH/LL, BOS/CHOCH,
+sweep/reclaim, breakout/retest, false-breakout rejection, executed-trade flow over exact 500/5,000
+windows, validated depth imbalance/absorption, ATR, UTC-day candle-volume VWAP proxy, relative volume and volatility
+expansion. Gold $10/$20/$30 and BTC percentage/ATR tiers are emitted only when geometric room and
+reward/risk permit them. No result is a learned forecast, probability, AI confirmation or order.
 
 ### Trade signal pipeline
-1. Produce a candidate only on a newly **closed** candle, after enough clean historical bars. Stable ID from `symbol|horizon|candle_close|direction|rule_version`.
+1. Produce a candidate only on a newly **closed** candle, after enough contiguous historical bars.
+   Stable ID from `asset|symbol|engine|horizon|candle_close|direction|rule_version`.
 2. Calculate ATR(14), range/structure levels and volatility budget. Evidence includes source freshness and numerical features. Candidate targets/stop computed by code, never AI.
-3. Freeze canonical snapshot + hash. Two independent API calls receive identical snapshot; no cross-peeking, ideally `asyncio.gather` with individual deadlines.
-4. Strict parse; require echoed snapshot ID, direction, supported target intersection; default `WAIT` for refusals, malformed, latency, budget, or API failure.
+3. Freeze canonical snapshot + hash. Persist the deterministic candidate revision and lifecycle
+   transition. Phase 2 stops here: it does not invoke GPT, Claude, alerts or execution.
+4. Phase 3 may give the same immutable snapshot to two independent AI calls. Strict parsing and
+   fail-closed consensus remain future gates; no Phase 2 candidate is `CONFIRMED`.
 5. Risk gate: positive entry/stop distances; reward/risk threshold; current price/timestamp freshness; legal/operational source entitlements; no disabled periods; duplicate suppression. `CONFIRMED` is merely an **alert**, NOT an instruction to buy options.
-6. Record initial decision, revisions, expiry and outcome separately. Never overwrite history. Alerts are deduplicated and include reason + invalidation + timestamp.
+6. Record candidate revisions, state transitions, invalidation and expiry as append-only rows. Never
+   overwrite history. Historical replay evaluates at each event-time candle close and requires the
+   candle's explicit availability timestamp in addition to event/receive clocks for trades and books.
 
 ### Volatility and performance
 ATR is a scale, not a directional prediction. Naive `ATR * sqrt(horizon / bar_minutes)` is a loose heuristic, not a forecast. Intraday sessions/news cause regime changes. Need walk-forward and purged time-based holdout, bootstrap CIs by day, fees/slippage, and target-before-stop labelling; ambiguous same-bar high/low = conservative loss or separate ambiguous bucket, not automatic win.
@@ -67,7 +80,9 @@ ATR is a scale, not a directional prediction. Naive `ATR * sqrt(horizon / bar_mi
 ### Storage and messaging roadmap
 - **M1 single-host store**: SQLite WAL contains immutable candidate/audit records plus an append-only
   raw public-event journal keyed by UTC-day logical partition. Database triggers block raw event
-  updates/deletes. Deterministic replay rebuilds closed candles and books. This is durable across
+  updates/deletes. Deterministic replay rebuilds closed trade-derived candles and books. REST
+  candles carry their response availability time in memory but are not yet stored as a raw source.
+  Feature snapshots and candidate/lifecycle evidence are persisted. This is durable across
   process restart but is not yet throughput-qualified as a high-frequency production tick database.
 - **Production target**: PostgreSQL + TimescaleDB (Windows native PostgreSQL or optional isolated Linux VM), durable raw events and candle tables; queue via PostgreSQL outbox or Redis in a supported Linux VM. Do NOT rely on discontinued native Windows Redis ports. Migrate only after measured feed throughput.
 - Retention policies: raw order-book updates may grow quickly; sample or compress according to license and analytical requirements. Backups: nightly database + off-host restore test.

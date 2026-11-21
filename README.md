@@ -5,7 +5,8 @@
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
 ## What is already implemented in this starter
-- FastAPI read-only `/api/health`, `/api/engines`, `/api/candidates` endpoints; authenticated production deployment remains operator work.
+- FastAPI read-only health, engine, candidate, revision, lifecycle and feature-snapshot endpoints;
+  authenticated production deployment remains operator work.
 - Delta India REST product discovery periodically validates live/operational BTC and available
   XAUT/PAXG linear futures/perpetuals, including vanilla notional, settlement, contract value,
   unit currencies and tick size. Existing collectors stay active when the verified symbols do not
@@ -14,10 +15,20 @@
   executed-trade windows, sequence/CRC32 validation and fail-closed book resynchronization.
 - Append-only SQLite raw-event/source-status journal with deterministic trade-to-candle replay and
   REST-vs-stream reconciliation helpers. SQLite capacity and retention still require a live soak.
-- Unit-tested ATR + closed-candle breakout candidate detectors across six asset × horizon configurations. **These provisional candidates are marked INCOMPLETE and cannot produce a confirmed alert until verified order-flow/quality gates are implemented.**
+- Six deterministic, independently configured engines (`GOLD_FAST`, `GOLD_HOURLY`,
+  `GOLD_SESSION`, `BTC_FAST`, `BTC_HOURLY`, `BTC_SESSION`). They evaluate only closed,
+  contiguous candles and combine confirmed market structure, liquidity sweeps or breakout/retests,
+  executed-trade flow, validated order-book state, ATR, UTC-day candle-volume VWAP proxy, relative volume and
+  volatility expansion. Outputs remain research `CANDIDATE` events, never trade confirmations.
 - Independent typed GPT/Claude adapters, frozen snapshot ID, strict two-provider consensus and fail-closed validation; calls are OFF by default.
-- SQLite audit store with duplicate-safe candidate and consensus records, health/data staleness states.
-- Optional CoinGlass V4 supported-coins probe; no assumption that subscription includes all endpoints.
+- SQLite audit store with duplicate-safe immutable candidate revisions, append-only lifecycle events,
+  consensus records and health/data staleness states.
+- Optional entitlement-gated CoinGlass V4 BTC open-interest and last-closed funding context. The
+  adapter verifies supported coins/pairs and never assumes Delta India coverage; paid liquidation
+  endpoints are not called by the engines.
+- A typed Gold reference-provider contract whose production adapter is deliberately unwired and
+  reports `UNAVAILABLE`. Tests use fixtures explicitly labelled non-live; no licensed XAU/USD or
+  macro integration is claimed.
 - Minimal responsive React dashboard; Windows PowerShell scripts, lint/test CI.
 
 ## Requirements
@@ -47,8 +58,9 @@ The worker polls REST closed candles and durably records validated public trade/
 Stored executed trades can be replayed deterministically into finalized candles; they do not
 reconstruct events from before collection began. Missing/invalid Gold instruments produce
 `UNAVAILABLE`/`PARTIAL`, not a substitute symbol or fake signal. The worker's AI evaluation requires
-`AI_ENABLED=true`, valid keys and model IDs, but M1 candidates remain `INCOMPLETE` until persisted
-candle-reconciliation health has adequate live coverage and is wired into the eligibility gate.
+`AI_ENABLED=true`, valid keys and model IDs. During Phase 2 the worker deliberately stops after
+persisting deterministic engine state and candidate lifecycle: GPT/Claude confirmation, alerts and
+execution are not invoked even if an AI flag is accidentally enabled.
 
 Build frontend:
 
@@ -70,7 +82,8 @@ Copy `.env.example`. Do not commit `.env`. Important variables:
   unchanged healthy feed
 - `LIVE_INGESTION_ENABLED=false`, `AI_ENABLED=false`, `TRADING_ENABLED=false`
 - `OPENAI_API_KEY`, `OPENAI_MODEL`; `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`
-- `COINGLASS_API_KEY`, `COINGLASS_ENABLED=false`, `COINGLASS_BASE_URL`
+- `COINGLASS_API_KEY`, `COINGLASS_ENABLED=false`, `COINGLASS_BASE_URL`, and the declared
+  `COINGLASS_PLAN` used to block endpoints outside the configured subscription
 - `DATABASE_PATH`, `DATA_MAX_AGE_SECONDS`, `MAX_AI_CALLS_PER_DAY`
 
 No `DELTA_API_KEY` is needed for public market data; do not give trading permissions to this MVP.
@@ -89,17 +102,42 @@ No `DELTA_API_KEY` is needed for public market data; do not give trading permiss
 - An `ob_updates` gap, reorder, bad CRC32, stale/future time, empty side, crossed book, or exchange
   snapshot error invalidates that book. It is unusable until a fresh valid snapshot is received.
 - Replay emits only closed, resolution-aligned candles. It never fills missing periods or uses an
-  in-progress bucket.
+  in-progress bucket. Phase 2 replay also requires each input candle's factual availability time,
+  so a late REST observation or revision cannot be treated as known at the candle close.
+
+## Phase 2 signal integrity behavior
+
+- FAST engines use 1-minute triggers with closed 3/5-minute context; HOURLY engines use 5-minute
+  breakout/retest logic with 15-minute/hour context; SESSION engines use 15-minute triggers with
+  1/4-hour structure context. Resampling never forward-fills gaps.
+- Confirmed pivots produce HH/HL/LH/LL and closed-candle BOS/CHOCH events without repainting.
+  Candidate IDs include asset, verified symbol, engine, horizon, candle close, direction and rule
+  version so retries cannot create duplicate signals.
+- Order flow uses the exact most recent 500 and 5,000 executed trades available at the evaluation
+  clock. Unknown aggressor roles are excluded from directional volume rather than guessed. Contract,
+  base and quote quantities remain separately labelled.
+- Sequence/checksum-validated books provide quote-notional depth imbalance and an explicit
+  absorption proxy. A stale, crossed, missing or corrupt book forces book-dependent engines to
+  `WAIT`.
+- Gold evaluates geometric $10/$20/$30 underlying distances against ATR, reward/risk and nearby
+  opposing levels. BTC tiers use the greater of configured percentage and ATR distances. These are
+  feasibility filters, not probabilities or claims of expected profit.
+- Missing or stale observations return `UNAVAILABLE`, `WAIT`, `WATCH` or `REJECTED`. Lifecycle
+  transitions, invalidation and expiry are append-only and replayable. Active candidates are
+  invalidated or expired when discovery, REST history or required feeds fail. Phase 2 defines no
+  `CONFIRMED` state and cannot place an order.
 
 See the [initial codebase audit](docs/audits/initial-codebase-audit.md) for the measured baseline,
 live discovery timestamp and remaining unverified operational work. Architecture and operating
 references are in [DESIGN.md](DESIGN.md),
-[ADR 0001](docs/adr/0001-delta-event-journal-and-book-integrity.md), [the API guide](docs/API.md),
+[ADR 0001](docs/adr/0001-delta-event-journal-and-book-integrity.md),
+[ADR 0002](docs/adr/0002-deterministic-six-engine-signals.md), [the API guide](docs/API.md),
+[the Phase 2 verification report](docs/audits/phase-2-verification.md),
 [the security policy](docs/SECURITY.md), and
 [the Windows runbook](docs/WINDOWS_DEPLOYMENT.md); the ordered backlog is the
 [implementation plan](docs/IMPLEMENTATION_PLAN.md). Contributors and coding agents should start
 with [AGENTS.md](AGENTS.md), [CODEX_START_HERE.md](prompts/CODEX_START_HERE.md), and
-[CODEX_TASK.md](prompts/CODEX_TASK.md). Release history is recorded in
+[CODEX_TASK.md](prompts/CODEX_TASK.md), and [CODEX_PHASE_2.md](prompts/CODEX_PHASE_2.md). Release history is recorded in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## Run quality checks
