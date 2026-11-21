@@ -5,6 +5,12 @@ review and Slack alerts; all external paths are disabled by default and order ex
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
+**Independent review:** the v0.2 findings documented in
+[the Phase 2 review](docs/audits/phase-2-independent-review.md) were the Phase 3 entry gate. The
+corrective and dual-provider slices are now implemented and regression-tested; see
+[the Phase 3 verification report](docs/audits/phase-3-verification.md). Architectural requirements
+and passing fixtures are not evidence of live provider readiness or strategy performance.
+
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.
 

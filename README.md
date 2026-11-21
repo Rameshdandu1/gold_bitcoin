@@ -4,6 +4,12 @@
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
+**Implementation status (2026-11-21):** Phase 3 is implemented and fixture-verified on top of the
+independently reviewed Phase 2 baseline. The reproduced R1–R6 correctness gaps are corrected; see
+[the Phase 3 verification report](docs/audits/phase-3-verification.md). Live provider/model access,
+Slack delivery, Windows service installation, market-data soak and strategy performance remain
+external acceptance gates.
+
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,
   queue, budget and feature-snapshot views. Only minimal `/healthz` is public.
@@ -164,6 +170,7 @@ references are in [DESIGN.md](DESIGN.md),
 [ADR 0003](docs/adr/0003-canonical-analysis-and-durable-review-jobs.md),
 [ADR 0004](docs/adr/0004-single-operator-auth-and-slack-outbox.md), [the API guide](docs/API.md),
 [the Phase 2 verification report](docs/audits/phase-2-verification.md),
+[the independent Phase 2 review](docs/audits/phase-2-independent-review.md),
 [the security policy](docs/SECURITY.md), and
 [the Windows runbook](docs/WINDOWS_DEPLOYMENT.md); the ordered backlog is the
 [implementation plan](docs/IMPLEMENTATION_PLAN.md). Contributors and coding agents should start
