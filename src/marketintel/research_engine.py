@@ -8,6 +8,7 @@ notification, account, or order transport.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from datetime import datetime, timedelta
@@ -16,7 +17,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from marketintel.models import BookFeatures, Candle, Instrument, TradeRecord
+from marketintel.models import (
+    BookFeatures,
+    Candle,
+    DetectionResult,
+    Instrument,
+    SignalState,
+    TradeRecord,
+)
 from marketintel.quantitative import QUANT_ENGINE_CONFIGS, detect_signal
 from marketintel.research_evaluation import evaluate_quotes
 from marketintel.research_models import (
@@ -75,6 +83,14 @@ class BookObservation(BaseModel):
     features: BookFeatures
 
 
+class SourceTransition(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["AVAILABLE", "UNAVAILABLE", "STALE", "GAP"]
+    generation: int = Field(ge=1)
+    reason: str
+
+
 def _instrument_from_version(version: InstrumentVersion) -> Instrument:
     underlying = version.base_currency.upper()
     return Instrument(
@@ -91,13 +107,27 @@ def _instrument_from_version(version: InstrumentVersion) -> Instrument:
     )
 
 
-def _revision_id(candidate_id: str, snapshot_id: str, rule_version: str) -> str:
+def candidate_revision_id(candidate_id: str, snapshot_id: str, rule_version: str) -> str:
     value = f"{candidate_id}|{snapshot_id}|{rule_version}".encode()
     return hashlib.sha256(value).hexdigest()[:32]
 
 
-def _to_research_candidate(candidate, instrument: Instrument) -> ResearchCandidate:
-    revision_id = _revision_id(
+def provider_request_digest(
+    candidate: ResearchCandidate, config: ExperimentConfig, provider: str
+) -> str:
+    preimage = {
+        "candidate": candidate.model_dump(mode="json"),
+        "config_hash": config.canonical_config_hash(),
+        "provider": provider,
+        "schema": "phase5-archived-provider-request-v1",
+    }
+    return hashlib.sha256(
+        json.dumps(preimage, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def to_research_candidate(candidate, instrument: Instrument) -> ResearchCandidate:
+    revision_id = candidate_revision_id(
         candidate.candidate_id, candidate.snapshot_id, candidate.rule_version
     )
     return ResearchCandidate(
@@ -121,6 +151,7 @@ class SharedResearchEngine:
     """Bounded normalized evidence state used by replay and live-style tests."""
 
     def __init__(self, manifest: DatasetManifest) -> None:
+        self.manifest = manifest
         self.instruments = {
             row.symbol: _instrument_from_version(row) for row in manifest.instruments
         }
@@ -134,6 +165,7 @@ class SharedResearchEngine:
         self.books: dict[str, BookFeatures] = {}
         self.book_sequences: dict[str, tuple[int, int]] = {}
         self.provider_completions: dict[tuple[str, str, str], ProviderCompletion] = {}
+        self.source_states: dict[str, SourceTransition] = {}
         self.dirty_symbols: set[str] = set()
         self.maximum_trade_state = 0
         self.maximum_candle_state = 0
@@ -210,7 +242,15 @@ class SharedResearchEngine:
         if row.kind == "EXECUTABLE_QUOTE":
             # The journal-backed outcome evaluator validates the full quote contract.
             return
-        if row.kind in {"SOURCE_TRANSITION", "EXPIRY"}:
+        if row.kind == "SOURCE_TRANSITION":
+            transition = SourceTransition.model_validate(payload)
+            prior = self.source_states.get(row.symbol)
+            if prior is not None and transition.generation < prior.generation:
+                raise ValueError("Source recovery generation moved backward")
+            self.source_states[row.symbol] = transition
+            self.dirty_symbols.add(row.symbol)
+            return
+        if row.kind == "EXPIRY":
             return
         if row.kind == "CANDIDATE":
             raise ValueError("Normal workflow derives candidates; archive import is separate")
@@ -221,9 +261,51 @@ class SharedResearchEngine:
             raise ValueError("Evaluation clock must be timezone aware")
         rows: list[tuple[object, Instrument]] = []
         for config in QUANT_ENGINE_CONFIGS:
-            symbol = "XAUTUSD" if config.asset == "GOLD" else "BTCUSD"
-            instrument = self.instruments.get(symbol)
+            instrument = next(
+                (
+                    item
+                    for item in self.instruments.values()
+                    if (
+                        item.underlying_asset.upper() == "BTC"
+                        if config.asset == "BTC"
+                        else item.underlying_asset.upper() in {"XAUT", "PAXG"}
+                    )
+                ),
+                None,
+            )
             if instrument is None:
+                continue
+            symbol = instrument.symbol
+            active_coverage = [
+                item
+                for item in self.manifest.coverage
+                if item.symbol == symbol and item.start_utc <= at <= item.end_utc
+            ]
+            transition = self.source_states.get(symbol)
+            coverage_reason = None
+            if not active_coverage:
+                coverage_reason = "NO_DECLARED_SYMBOL_COVERAGE"
+            elif any(
+                not item.sequence_valid
+                or not item.checksum_valid
+                or any(start <= at < end for start, end in item.gaps)
+                for item in active_coverage
+            ):
+                coverage_reason = "DECLARED_SOURCE_COVERAGE_INVALID_OR_GAPPED"
+            elif transition is not None and transition.state != "AVAILABLE":
+                coverage_reason = f"SOURCE_{transition.state}:{transition.reason}"
+            if coverage_reason is not None:
+                rows.append(
+                    (
+                        DetectionResult(
+                            engine=config.engine,
+                            state=SignalState.WAIT,
+                            observed_at_utc=at,
+                            reason=coverage_reason,
+                        ),
+                        instrument,
+                    )
+                )
                 continue
             result = detect_signal(
                 config,
@@ -259,6 +341,17 @@ def _provider_decision(
             state="UNAVAILABLE",
             ready_at_utc=candidate.expires_at_utc,
             reason="No matching contemporary archived assessment",
+        )
+    if completion.configuration_digest != config.canonical_config_hash() or (
+        completion.request_digest != provider_request_digest(candidate, config, completion.provider)
+    ):
+        return ArmDecision(
+            arm=arm,
+            state="UNAVAILABLE",
+            ready_at_utc=completion.completed_at_utc,
+            reason="Archived assessment request/configuration identity mismatch",
+            provider_latency_ms=completion.provider_latency_ms,
+            attributable_cost_microusd=completion.attributable_cost_microusd,
         )
     if completion.decision == "CONFIRM" and config.target_index not in (
         completion.supported_target_indices
@@ -383,7 +476,7 @@ def run_shared_workflow(
             evaluations += 1
             if result.candidate is None:
                 continue
-            candidate = _to_research_candidate(result.candidate, instrument)
+            candidate = to_research_candidate(result.candidate, instrument)
             identity = (candidate.opportunity_id, candidate.revision_id)
             if identity in seen:
                 continue

@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from test_phase2_quantitative import supporting_book
 from test_phase3_ai import SequenceTransport, review_settings, valid_assessment
 from test_phase3_consensus import analysis_fixture, approvals, persist_candidate
 from test_phase3_service_alerts import FakeSlack, alert_settings, committed_alert
@@ -28,6 +29,7 @@ from marketintel.notifications import AlertWorker
 from marketintel.orchestration import ReviewOrchestrator, frozen_provider_config
 from marketintel.paper_worker import PaperWorkerConfig, run_cycle
 from marketintel.quantitative import lifecycle_event
+from marketintel.research_engine import SharedResearchEngine
 from marketintel.research_evaluation import (
     arm_metrics,
     evaluate_bar_path,
@@ -392,6 +394,66 @@ def test_p4_11_replay_checkpoint_and_points_keep_bounded_references() -> None:
     assert len(checkpoint.visible_observation_ids) == 128
     assert all(len(point.visible_observation_ids) <= 128 for point in points)
     assert len(checkpoint.model_dump_json()) < 10_000
+
+
+def test_p4_01_book_gap_requires_new_snapshot_generation() -> None:
+    state = SharedResearchEngine(manifest())
+    features = supporting_book(NOW, "BULLISH")
+    state.apply(
+        ReplayObservation(
+            observation_id="book-snapshot-1",
+            kind="BOOK_SNAPSHOT",
+            symbol="BTCUSD",
+            venue="delta_india",
+            exchange_time_utc=NOW,
+            available_at_utc=NOW,
+            persistence_sequence=1,
+            payload={
+                "sequence": 1,
+                "generation": 1,
+                "snapshot": True,
+                "features": features.model_dump(mode="json"),
+            },
+        )
+    )
+    state.apply(
+        ReplayObservation(
+            observation_id="book-delta-gap",
+            kind="BOOK_DELTA",
+            symbol="BTCUSD",
+            venue="delta_india",
+            exchange_time_utc=NOW,
+            available_at_utc=NOW,
+            persistence_sequence=2,
+            payload={
+                "sequence": 3,
+                "generation": 1,
+                "snapshot": False,
+                "features": features.model_dump(mode="json"),
+            },
+        )
+    )
+    assert state.books["BTCUSD"].available is False
+    assert state.books["BTCUSD"].reason == "BOOK_SEQUENCE_GAP_REQUIRES_SNAPSHOT"
+
+    state.apply(
+        ReplayObservation(
+            observation_id="book-snapshot-2",
+            kind="BOOK_SNAPSHOT",
+            symbol="BTCUSD",
+            venue="delta_india",
+            exchange_time_utc=NOW,
+            available_at_utc=NOW,
+            persistence_sequence=3,
+            payload={
+                "sequence": 1,
+                "generation": 2,
+                "snapshot": True,
+                "features": features.model_dump(mode="json"),
+            },
+        )
+    )
+    assert state.books["BTCUSD"].available is True
 
 
 def test_p4_10_research_records_are_conflict_detecting_not_overwritten(tmp_path) -> None:

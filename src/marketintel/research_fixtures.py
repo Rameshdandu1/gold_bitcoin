@@ -15,7 +15,12 @@ from pathlib import Path
 
 from marketintel.models import BookFeatures, Candle, Instrument, TradeRecord
 from marketintel.quantitative import QUANT_ENGINE_CONFIGS, detect_signal
-from marketintel.research_engine import ProviderCompletion, _revision_id
+from marketintel.research_engine import (
+    ProviderCompletion,
+    candidate_revision_id,
+    provider_request_digest,
+    to_research_candidate,
+)
 from marketintel.research_models import (
     CostPolicy,
     DatasetManifest,
@@ -253,7 +258,7 @@ def generate_fixture(asset: str, output: Path) -> tuple[Path, Path]:
     )
     for engine_config in configs:
         candidate = candidates[engine_config.engine]
-        revision_id = _revision_id(
+        revision_id = candidate_revision_id(
             candidate.candidate_id, candidate.snapshot_id, candidate.rule_version
         )
         for provider, seconds in (("GPT", 2), ("CLAUDE", 3)):
@@ -265,9 +270,12 @@ def generate_fixture(asset: str, output: Path) -> tuple[Path, Path]:
                 decision="CONFIRM",
                 supported_target_indices=(1,),
                 completed_at_utc=FIXTURE_NOW + timedelta(seconds=seconds),
-                request_digest=hashlib.sha256(
-                    f"{candidate.candidate_id}|{provider}|fixture".encode()
-                ).hexdigest(),
+                request_digest=provider_request_digest(
+                    # The public workflow must independently reproduce this exact revision.
+                    to_research_candidate(candidate, instrument),
+                    config,
+                    provider,
+                ),
                 configuration_digest=config.canonical_config_hash(),
                 provider_latency_ms=seconds * 100,
                 attributable_cost_microusd=0,
