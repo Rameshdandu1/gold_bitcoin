@@ -34,9 +34,11 @@ prospective worker is separately bounded and disabled:
 
 **Review status (2026-11-21):** Phase 5 software acceptance uses complete hypothetical Gold/BTC
 streams and negative controls. P4-01 through P4-12 are addressed by regressions or explicitly
-recorded limitations. Live provider/model entitlement, adequate licensed historical data, genuine
-historical AI assessments, Slack delivery, prospective observation duration, destination Windows
-Server recovery, market-data soak and empirical strategy performance remain unverified.
+recorded limitations from the
+[independent Phase 4 review](docs/audits/phase-4-independent-review.md). Live provider/model
+entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
+prospective observation duration, destination Windows Server recovery, market-data soak and
+empirical strategy performance remain unverified.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,
@@ -200,6 +202,7 @@ references are in [DESIGN.md](DESIGN.md),
 [the Phase 2 verification report](docs/audits/phase-2-verification.md),
 [the independent Phase 2 review](docs/audits/phase-2-independent-review.md),
 [the independent Phase 3 review](docs/audits/phase-3-independent-review.md),
+[the independent Phase 4 review](docs/audits/phase-4-independent-review.md),
 [the security policy](docs/SECURITY.md), and
 [the Windows runbook](docs/WINDOWS_DEPLOYMENT.md); the ordered backlog is the
 [implementation plan](docs/IMPLEMENTATION_PLAN.md). Contributors and coding agents should start

@@ -50,12 +50,13 @@ units are versioned, and required funding fails closed. Outcomes preserve `NO_EN
 time exit, `AMBIGUOUS` and `INCOMPLETE`. Folds keep all opportunity revisions/arms together and
 purge overlapping label-information intervals with a time embargo.
 
-**Independent review:** the original Phase 2 counterexamples and the subsequent
-[Phase 3 review](docs/audits/phase-3-independent-review.md) findings have regression coverage and
-Phase 4 corrections. Architectural requirements remain distinct from empirical acceptance: live
-providers, licensed data, prospective duration and deployment are not proven by fixtures. Follow
-[CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md). Passing fixtures are
-not evidence of live provider readiness or strategy performance.
+**Independent review:** the [independent Phase 4 review](docs/audits/phase-4-independent-review.md)
+identified the correctness and workflow gaps assigned to Phase 5. Those findings now have the
+regression coverage and implementation evidence recorded in
+[phase-5-verification.md](docs/audits/phase-5-verification.md). Architectural requirements remain
+distinct from empirical acceptance: live providers, licensed data, prospective duration and
+destination deployment are not proven by fixtures. Passing fixtures are not evidence of live
+provider readiness or strategy performance.
 
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.
@@ -125,8 +126,9 @@ reward/risk permit them. No result is a learned forecast, probability, AI confir
    reconciliation, book, spread, entry drift, cost and calendar/session policy. Atomically commit the
    decision and revision-scoped outbox intent. `CONFIRMED` is merely an **alert**, NOT an order.
 6. Record candidate revisions, state transitions, invalidation and expiry as append-only rows. Never
-   overwrite history. Historical replay evaluates at each event-time candle close and requires the
-   candle's explicit availability timestamp in addition to event/receive clocks for trades and books.
+   overwrite history. The required shared strategy replay must reproduce observation availability
+   and evaluation cadence while features use event time. The current visibility-only timeline and
+   older candle-close helper do not yet implement that complete workflow.
 
 ### Volatility and performance
 ATR is a scale, not a directional prediction. Naive `ATR * sqrt(horizon / bar_minutes)` is a loose heuristic, not a forecast. Intraday sessions/news cause regime changes. Need walk-forward and purged time-based holdout, bootstrap CIs by day, fees/slippage, and target-before-stop labelling; ambiguous same-bar high/low = conservative loss or separate ambiguous bucket, not automatic win.

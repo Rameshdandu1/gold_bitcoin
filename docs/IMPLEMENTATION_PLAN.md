@@ -83,11 +83,10 @@ Implementation order and acceptance details are in [CODEX_PHASE_3.md](../prompts
 AI and outbound alerts remain disabled by default. Fixture completion, paid-provider smoke tests,
 Windows deployment and strategy-performance validation are separate evidence categories.
 
-**Independent Phase 3 review gate (2026-11-21):** the implementation checkboxes above describe
-delivered code, not closed acceptance. The 171-test baseline passes, but
-[the independent review](audits/phase-3-independent-review.md) reproduces P3-01 through P3-10 and
-identifies recovery/deadline acceptance gaps. The original Phase 2 counterexamples improved;
-current startup, live review and alert guarantees still require the corrective 4A slice.
+**Independent review history:** the original Phase 3 reproductions now have verified corrections.
+The later [Phase 4 review](audits/phase-4-independent-review.md) distinguishes those improvements
+from remaining dispatch, request-configuration and recovery defects. Implementation checkboxes
+above describe delivered code, not completed operational or empirical acceptance.
 
 ## Phase 4 — historical evaluation and prospective paper research
 
@@ -98,32 +97,36 @@ current startup, live review and alert guarantees still require the corrective 4
 
 Detailed implementation instructions: [CODEX_PHASE_4.md](../prompts/CODEX_PHASE_4.md).
 
-- [x] **4A:** fix environment-template parsing, complete-bucket reconciliation, request digest,
+- [ ] **4A acceptance:** fix environment-template parsing, complete-bucket reconciliation, request digest,
   revision scheduling, consistent risk/commit evidence, real input/spend limits, model/finish-status
   identity, dispatch recovery/destination, current alert eligibility and structure-state logic.
   Test finalization crashes/deadlines and non-ASCII auth input handling.
-- [x] **4B:** versioned dataset manifest and isolated as-observed replay, driven by factual
+- [ ] **4B acceptance:** versioned dataset manifest and isolated as-observed replay, driven by factual
   availability/evaluation clocks with separate exchange event time, coverage and checkpoint parity.
-- [x] **4C:** eligible entry time, instrument/target identity, complete outcome path, conservative
+- [ ] **4C acceptance:** eligible entry time, instrument/target identity, complete outcome path, conservative
   ambiguity, realistic quote-side fills and versioned contract/fee/slippage/funding assumptions.
-- [x] **4D:** rules/GPT/Claude/dual filter comparisons on common opportunities, arm-specific latency,
+- [ ] **4D acceptance:** rules/GPT/Claude/dual filter comparisons on common opportunities, arm-specific latency,
   preserved abstention denominators, shared opportunity folds, time-based label-information
   purging including delayed no-entry outcomes, untouched holdout and dependence-aware uncertainty.
   Retrospective LLM analysis remains explicitly exploratory.
-- [x] **4E:** durable prospective paper ledger, write-before-outcome decisions, restart/gap handling
+- [ ] **4E acceptance:** durable prospective paper ledger, write-before-outcome decisions, restart/gap handling
   and separately declared hypothetical portfolio policy. Default off; no exchange orders.
-- [x] **4F:** authenticated research pages, reproducible CLI/exports, coverage/sample/uncertainty
+- [ ] **4F acceptance:** authenticated research pages, reproducible CLI/exports, coverage/sample/uncertainty
   reporting, honest insufficient-evidence states and native Windows run instructions.
 
 Software/fixture completion does not complete weeks of forward observation or demonstrate an edge.
 Unavailable historical trades/books, licensed context and contemporaneous AI outputs stay
 unavailable; no synthetic performance may be presented as empirical evidence.
 
-These checkboxes mean software and deterministic-fixture completion only. Real dataset licensing,
-genuine historical provider assessments, forward paper observation, statistical uncertainty on an
-adequate sample and destination Windows Server deployment remain open acceptance work.
+**Independent Phase 4 gate (2026-11-21):** PR #6 delivered corrections and research components, with
+206 passing tests. The [independent review](audits/phase-4-independent-review.md) identified the
+integrated replay, outcome, paper chronology, dispatch and recovery gaps assigned to Phase 5. The
+historical implementation report remains evidence of its executed checks, not closure of those later
+findings. Real data, contemporary model assessments and forward observation remain separate.
 
 ## Phase 5 — research completion and operational validation
+
+Detailed instructions: [CODEX_PHASE_5.md](../prompts/CODEX_PHASE_5.md).
 
 - [x] **5A:** shared current-risk delivery policy, transaction-fenced dispatch authorization,
   zero-call terminal/configuration preflight and durable expired-result dispositions.
