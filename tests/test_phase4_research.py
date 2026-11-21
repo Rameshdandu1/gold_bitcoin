@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -29,7 +30,7 @@ from marketintel.research_models import (
     ResearchCandidate,
     SourceCoverage,
 )
-from marketintel.research_replay import replay
+from marketintel.research_replay import replay, spool_observations
 from marketintel.research_storage import PaperLedger, ResearchStore
 from marketintel.storage import Store
 
@@ -180,6 +181,27 @@ def test_declared_source_gap_is_unavailable_not_negative_result() -> None:
     assert points[2].status == "UNAVAILABLE"
     assert points[2].reason == "DECLARED_SOURCE_GAP:fixture"
     assert points[3].status == "ELIGIBLE"
+
+
+def test_disk_spool_orders_chunks_without_materializing_input(tmp_path) -> None:
+    source = tmp_path / "observations.jsonl"
+    rows = list(reversed(observations()))
+    source.write_text("".join(row.model_dump_json() + "\n" for row in rows), encoding="utf-8")
+    supplied_data = manifest().model_dump(mode="json")
+    supplied_data["files"] = [
+        {
+            "path": source.name,
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "record_count": 2,
+        }
+    ]
+    supplied = DatasetManifest.model_validate(supplied_data)
+    ordered = spool_observations(
+        tmp_path / "manifest.json", supplied, tmp_path / "spool.sqlite3", batch_size=1
+    )
+    points, checkpoint = replay(supplied, config(), ordered, presorted=True)
+    assert points[-1].visible_observation_ids == ("early", "correction")
+    assert checkpoint.input_offset == 2
 
 
 def test_quote_evaluation_uses_actual_ready_time_costs_and_original_target_index() -> None:

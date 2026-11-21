@@ -19,7 +19,7 @@ the Windows sandbox parent traversal policy; a scoped authorized rerun passed.
 
 Final verification on 2026-11-21:
 
-- `python -m pytest -q`: **205 passed**, with one pre-existing TestClient deprecation warning.
+- `python -m pytest -q`: **206 passed**, with one pre-existing TestClient deprecation warning.
 - `python -m ruff check .`, `python -m ruff format --check .`,
   `python -m compileall -q src tests` and `git diff --check`: **passed**.
 - `npm ci`, `npm run typecheck` and `npm run build`: **passed**. The build used the same scoped
@@ -56,8 +56,9 @@ provider-side cancellation timing remain external acceptance, not fixture proof.
 
 - Manifests/configs cover data mode, provenance/license, hashes/counts, instrument validity/units,
   source coverage/gaps, code/rule/feature versions and costs.
-- Availability-clock replay has deterministic ties/checkpoints. Corrections wait for arrival,
-  declared gaps are unavailable, and restart/full hashes match.
+- Availability-clock replay has deterministic ties/checkpoints. A bounded-batch temporary SQLite
+  spool externally orders large evidence files and emits progress without retaining all records in
+  memory. Corrections wait for arrival, gaps are unavailable, and restart/full hashes match.
 - Research state is isolated from production; an equal database path is rejected.
 - Outcomes use each arm's ready time, original target, active product, expiry and executable path.
   Bid/ask, adverse slippage/tick rounding, multiplier, quantity, fees and funding are explicit.

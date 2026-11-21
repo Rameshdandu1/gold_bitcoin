@@ -15,6 +15,7 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from marketintel.research_evaluation import (
     arm_metrics,
@@ -22,7 +23,13 @@ from marketintel.research_evaluation import (
     purged_folds,
 )
 from marketintel.research_models import ExperimentConfig, OpportunityRecord, ReplayCheckpoint
-from marketintel.research_replay import load_manifest, load_observations, replay, write_checkpoint
+from marketintel.research_replay import (
+    iter_observations,
+    load_manifest,
+    replay,
+    spool_observations,
+    write_checkpoint,
+)
 from marketintel.research_storage import ResearchStore
 
 
@@ -54,14 +61,14 @@ def _checksums(directory: Path, excluded: set[str] | None = None) -> None:
 def command_validate(args: argparse.Namespace) -> int:
     manifest_path = Path(args.manifest).resolve()
     manifest = load_manifest(manifest_path, verify_files=True)
-    observations = load_observations(manifest_path, manifest)
+    record_count = sum(1 for _ in iter_observations(manifest_path, manifest))
     print(
         json.dumps(
             {
                 "valid": True,
                 "dataset_id": manifest.dataset_id,
                 "data_mode": manifest.data_mode,
-                "record_count": len(observations),
+                "record_count": record_count,
                 "coverage": [row.model_dump(mode="json") for row in manifest.coverage],
             },
             sort_keys=True,
@@ -75,20 +82,33 @@ def command_replay(args: argparse.Namespace) -> int:
     config_path = Path(args.config).resolve()
     manifest = load_manifest(manifest_path, verify_files=True)
     config = _load_config(config_path)
-    observations = load_observations(manifest_path, manifest)
     checkpoint_path = Path(args.checkpoint).resolve() if args.checkpoint else None
     checkpoint = None
     if checkpoint_path and checkpoint_path.exists():
         checkpoint = ReplayCheckpoint.model_validate_json(
             checkpoint_path.read_text(encoding="utf-8")
         )
-    points, next_checkpoint = replay(
-        manifest,
-        config,
-        observations,
-        checkpoint=checkpoint,
-        maximum_points=args.maximum_points,
-    )
+
+    def progress(completed: int) -> None:
+        if args.progress_every and completed % args.progress_every == 0:
+            print(json.dumps({"progress_points_completed": completed}), file=sys.stderr)
+
+    with TemporaryDirectory(prefix="marketintel-replay-") as temporary:
+        observations = spool_observations(
+            manifest_path,
+            manifest,
+            Path(temporary) / "sort.sqlite3",
+            batch_size=args.chunk_size,
+        )
+        points, next_checkpoint = replay(
+            manifest,
+            config,
+            observations,
+            checkpoint=checkpoint,
+            maximum_points=args.maximum_points,
+            presorted=True,
+            progress=progress,
+        )
     store = ResearchStore(
         Path(args.database).resolve(), production_path=Path(args.production_database).resolve()
     )
@@ -243,6 +263,8 @@ def parser() -> argparse.ArgumentParser:
     replay_command.add_argument("--production-database", default="data/marketintel.sqlite3")
     replay_command.add_argument("--checkpoint")
     replay_command.add_argument("--maximum-points", type=int)
+    replay_command.add_argument("--chunk-size", type=int, default=2_000)
+    replay_command.add_argument("--progress-every", type=int, default=1_000)
     replay_command.set_defaults(handler=command_replay)
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument("--database", required=True)
