@@ -1,0 +1,19 @@
+{
+  "schema_version": "1",
+  "experiment_id": "fixture-experiment-001",
+  "dataset_id": "fixture-dataset-001",
+  "created_at_utc": "2026-01-02T10:00:00Z",
+  "evaluation_start_utc": "2026-01-02T10:00:00Z",
+  "evaluation_end_utc": "2026-01-02T10:03:00Z",
+  "evaluation_cadence_seconds": 60,
+  "cost_policy": {
+    "schema_version": "1",
+    "policy_id": "fixture-cost-v1",
+    "quantity_contracts": "1",
+    "fee_bps_per_side": "1",
+    "slippage_bps_per_side": "1",
+    "funding_bps": null,
+    "funding_required": false,
+    "maximum_quote_gap_seconds": 60
+  }
+}

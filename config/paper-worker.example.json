@@ -1,0 +1,8 @@
+{
+  "schema_version": "1",
+  "enabled": false,
+  "ledger_path": "data/paper.sqlite3",
+  "production_database_path": "data/marketintel.sqlite3",
+  "recorded_decisions_path": null,
+  "maximum_records_per_cycle": 100
+}

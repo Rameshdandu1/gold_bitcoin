@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from marketintel.config import Settings
 from marketintel.detectors import describe_engines
+from marketintel.research_storage import PaperLedger, ResearchStore
 from marketintel.storage import Store
 
 
@@ -41,7 +42,7 @@ def _authorized(request: Request, settings: Settings) -> bool:
 def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
     settings = settings or Settings()
     store = store or Store(settings.database_path)
-    app = FastAPI(title=settings.app_name, version="0.3.0")
+    app = FastAPI(title=settings.app_name, version="0.4.0")
     allowed_origins = tuple(
         origin.strip() for origin in settings.cors_allowed_origins_csv.split(",") if origin.strip()
     )
@@ -91,7 +92,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             <= settings.delta_discovery_refresh_seconds + 60
         )
         checks = {
-            "database_migration": "0003_phase3_review_pipeline" in store.migration_ids(),
+            "database_migration": "0004_phase4_integration_corrections" in store.migration_ids(),
             "operator_authentication": (
                 not settings.operator_auth_enabled
                 or bool(
@@ -161,6 +162,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             "live_ingestion_enabled": settings.live_ingestion_enabled,
             "ai_enabled": settings.ai_enabled,
             "alerts_enabled": settings.alerts_enabled,
+            "paper_collection_enabled": settings.paper_collection_enabled,
             "trading_enabled": False,
             "services": store.get_status(),
             "source_health": store.all_source_health(),
@@ -204,6 +206,22 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.get("/api/queue")
     def queue() -> dict:
         return store.queue_status()
+
+    @app.get("/api/research/summary")
+    def research_summary() -> dict:
+        research_store = ResearchStore(
+            settings.research_database_path, production_path=settings.database_path
+        )
+        paper_ledger = PaperLedger(
+            settings.paper_database_path, production_path=settings.database_path
+        )
+        return {
+            **research_store.summary(),
+            "paper": paper_ledger.summary(),
+            "data_mode": "NO_DATASET_SELECTED",
+            "external_calls_performed": 0,
+            "real_notifications_sent": 0,
+        }
 
     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if dist.is_dir():

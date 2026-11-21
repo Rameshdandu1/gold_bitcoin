@@ -15,12 +15,15 @@ class Settings(BaseSettings):
     ai_enabled: bool = False
     trading_enabled: bool = False
     alerts_enabled: bool = False
+    paper_collection_enabled: bool = False
 
     delta_rest_url: str = "https://api.india.delta.exchange"
     delta_ws_url: str = "wss://public-socket.india.delta.exchange"
     btc_symbol: str = "BTCUSD"
     gold_symbol: str = "XAUTUSD"
     database_path: Path = Path("data/marketintel.sqlite3")
+    research_database_path: Path = Path("data/research.sqlite3")
+    paper_database_path: Path = Path("data/paper.sqlite3")
     data_max_age_seconds: int = Field(default=180, ge=15, le=3600)
     delta_book_max_age_seconds: float = Field(default=10, ge=1, le=120)
     delta_discovery_refresh_seconds: int = Field(default=300, ge=30, le=3600)
