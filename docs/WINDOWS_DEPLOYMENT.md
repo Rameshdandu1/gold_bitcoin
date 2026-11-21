@@ -120,22 +120,28 @@ Use the repository virtual environment and Windows paths. Research and paper fil
 .\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures
 .\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest data\phase5-fixtures\gold-manifest.json
 .\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3
+.\.venv\Scripts\python.exe -m marketintel.research paper-workflow --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research evaluate --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
 ```
 
-Repeat the workflow with the BTC manifest/config and `phase5-btc-workflow-v1`. Every generated file
-is labelled `SYNTHETIC_FIXTURE`; delete it before configuring licensed/private evidence. The
+Repeat the workflow with the BTC manifest/config and `phase5-btc-workflow-v1`. The connected paper
+command persists frozen arms before latency-adjusted eligible entry and derives outcomes from later
+quotes/source events. Fixture decisions are `SIMULATED_PROSPECTIVE`, not elapsed prospective
+evidence. Every generated file is labelled `SYNTHETIC_FIXTURE`; delete it before configuring licensed/private evidence. The
 example paper config and `PAPER_COLLECTION_ENABLED` are disabled. An approved local paper stream
-must declare a stable `source_identity` and increment `source_generation` on rotation; replacement
-or truncation is refused. The worker is bounded by `--once` and cannot send orders.
+must declare a stable `source_identity` and increment `source_generation` on rotation; replacement,
+reordering or truncation before the committed cursor is refused using a consumed-prefix SHA-256.
+Each imported event and cursor advance commit atomically. The worker is bounded by `--once` and
+cannot send orders.
 
 Back up production, research and paper SQLite files with their manifests, configurations, source
 generation records, checkpoints and report `SHA256SUMS`. A safe restore stops all writers, verifies
 each database, restores the matching artifact set, then reruns the bounded command. Do not copy a
 cursor without its exact source identity/generation. Destination-server Task Scheduler install,
-reboot/restore, log rotation and long paper/live soaks were not run in Phase 5.
+reboot/restore, log rotation and long paper/live soaks were not run in Phase 6. Native Windows
+checks validate code paths, not the destination host.
 
 ## 7. Operational acceptance still required
 

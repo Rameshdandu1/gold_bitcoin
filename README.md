@@ -1,25 +1,29 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
-## Phase 5 research-completion workflow
+## Phase 6 evidence-integrity workflow
 
-Phase 5 connects factual-availability replay to the production six-engine detector, frozen four-arm
-decisions, quote-side outcome evaluation, protected time partitions, authoritative exports and a
-prospective paper event ledger. Research and paper state remain isolated from production review,
-budget and notification state. The included generator creates explicitly synthetic Gold/BTC
-software-verification streams; it does not establish strategy accuracy or profitability.
+Phase 6 preserves factual event/completion/availability clocks and evidence modes from normalized
+input through the six-engine detector, frozen four-arm decisions, quote-side outcomes, protected
+partitions, exports and a connected paper ledger. Research and paper state remain isolated from
+production review, budget and notification state. The included generator creates explicitly
+synthetic Gold/BTC verification streams; it does not establish strategy accuracy or profitability.
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures
 .\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest data\phase5-fixtures\gold-manifest.json
 .\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3
+.\.venv\Scripts\python.exe -m marketintel.research paper-workflow --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research evaluate --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
 ```
 
-Repeat `run-workflow`, `evaluate` and `report` with the generated BTC manifest/config and
+Repeat `run-workflow`, `paper-workflow`, `evaluate` and `report` with the generated BTC manifest/config and
 `phase5-btc-workflow-v1`. Acceptance tests run all six real detectors; fixture provider completions
-remain labelled `SYNTHETIC_FIXTURE`. Missing genuine assessments stay `UNAVAILABLE`. The
-prospective worker is separately bounded and disabled:
+remain labelled `SYNTHETIC_FIXTURE`. `paper-workflow` is explicitly
+`SIMULATED_PROSPECTIVE`: it durably records decisions before eligible fixture entry and derives
+outcomes from later normalized quotes. It is not elapsed real-time prospective evidence. Missing
+genuine assessments stay `UNAVAILABLE`. The external local-stream importer is separately bounded
+and disabled:
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
@@ -32,10 +36,12 @@ prospective worker is separately bounded and disabled:
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-21):** Phase 5 software acceptance uses complete hypothetical Gold/BTC
-streams and negative controls. P4-01 through P4-12 are addressed by regressions or explicitly
-recorded limitations from the
-[independent Phase 4 review](docs/audits/phase-4-independent-review.md). Live provider/model
+**Review status (2026-11-22):** Phase 6 closes the demonstrated P5-01, P5-02, P5-04, P5-05,
+P5-06 and P5-07 defects and the concrete P5-03 source/scheduling counterexamples with worker,
+store and public-command regressions. Full production-worker/shared-service parity and durable
+full-workflow checkpoint/resume remain explicit acceptance limitations. See the
+[independent Phase 5 review](docs/audits/phase-5-independent-review.md) and
+[Phase 6 verification](docs/audits/phase-6-verification.md). Live provider/model
 entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
 prospective observation duration, destination Windows Server recovery, market-data soak and
 empirical strategy performance remain unverified.
@@ -209,7 +215,8 @@ references are in [DESIGN.md](DESIGN.md),
 with [AGENTS.md](AGENTS.md), [CODEX_START_HERE.md](prompts/CODEX_START_HERE.md) and
 [CODEX_TASK.md](prompts/CODEX_TASK.md). Phase instructions are in
 [CODEX_PHASE_2.md](prompts/CODEX_PHASE_2.md), [CODEX_PHASE_3.md](prompts/CODEX_PHASE_3.md) and
-[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md) and [CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md).
+[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md), [CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md) and
+[CODEX_PHASE_6.md](prompts/CODEX_PHASE_6.md).
 Release history is recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Run quality checks

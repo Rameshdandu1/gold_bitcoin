@@ -1,11 +1,37 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: Design v0.5 / research-completion MVP. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: Design v0.6 / evidence-integrity MVP. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
-## Phase 5 evidence architecture
+## Phase 6 evidence architecture
+
+The alert worker refreshes its clock at each risk attempt and again inside the short dispatch
+authorization transaction. The eligibility token and evaluated trade set use the same receive-time
+cutoff; the authorization records its actual time and evidence freshness deadline. Legacy review
+jobs without the complete frozen request policy are quarantined with a typed zero-call disposition.
+Migration `0006_phase6_evidence_integrity` is additive.
+
+Research preserves provider completion and factual availability separately. Arm readiness uses
+availability, executable quote fills use the later of event and availability time, and arm/outcome
+records retain data/evidence modes and request/configuration identities. Synthetic provider rows
+cannot be relabelled as prospective by changing only a manifest assertion. Quote evaluation proves
+a start anchor and every pre/post-entry gap; OHLC evaluation requires contiguous intervals.
+
+The scheduler evaluates every frozen cadence even during input silence. Source transitions are
+applied at their availability time to provider readiness and outcome eligibility. This closes the
+reviewed dirty-symbol/source-loss counterexamples; complete reuse of production admission and
+durable full-workflow checkpoint/resume remain separate open acceptance gates.
+
+The connected `paper-workflow` command consumes the stored normalized journal and frozen decisions,
+writes decisions before their latency-adjusted eligible entry, and derives outcomes from later
+quotes/source events. Fixture runs are labelled `SIMULATED_PROSPECTIVE`, never prospective elapsed
+observation. The local-stream worker commits each event and cursor atomically and binds progress to
+source identity, generation and a consumed-prefix SHA-256. Ordinary research reads centrally hide
+holdout/crossing outcomes until `final-holdout` records the frozen access identity.
+
+## Phase 5 evidence foundation
 
 The public `run-workflow` command validates the canonical dataset manifest, externally sorts input
 by factual availability, and sends normalized trades, candles, book generations, instruments and
@@ -29,8 +55,8 @@ overwriting scientific history.
 The paper ledger binds candidate, revision, arm, target, configuration, source identity/generation,
 decision persistence time and eligible-entry time. Prospective entries/outcomes must occur after
 the decision write and be factually available before recording. Historical import remains a
-distinct evidence mode. The worker advances a source-bound cursor after each idempotent event and
-detects replacement or truncation.
+distinct evidence mode. Phase 6 advances a source-bound cursor in the same transaction as each
+idempotent event and detects replacement, reordering or truncation through a consumed-prefix hash.
 
 ## Phase 4 foundation
 

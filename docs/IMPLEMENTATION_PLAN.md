@@ -145,7 +145,31 @@ These checkboxes are software acceptance on explicitly synthetic streams. Adequa
 history, genuine contemporary provider completions, extended prospective observation, live
 integration soaks and destination-host recovery remain empirical/operational gates.
 
-## Phase 6 — derivatives/optional execution (separate approval; deferred)
+## Phase 6 — evidence integrity and complete workflow acceptance
+
+Detailed instructions: [CODEX_PHASE_6.md](../prompts/CODEX_PHASE_6.md).
+
+- [x] **6A:** advancing-clock alert authorization, cutoff-aligned evidence token, persisted
+  freshness deadline and typed zero-call quarantine for incomplete legacy request policy.
+- [x] **6B:** provider/quote availability and provenance retention, compatible evidence-mode
+  validation, contiguous pre-entry/post-entry quote and OHLC coverage, versioned Phase 6 outcomes.
+- [x] **6C reviewed counterexamples:** cadence evaluation during silence, availability-time provider
+  decisions, source-state gates and a public connected paper command deriving later outcomes.
+- [x] **6D:** atomic paper-event/cursor commits, consumed-prefix identity, duplicate-first recovery,
+  replacement/truncation/conflict and interrupted-transaction regressions.
+- [x] **6E:** central holdout projection for ordinary API/detail/summary/export inputs and durable
+  explicit final opening with `HOLDOUT_PROTECTED`/`HOLDOUT_OPENED` operator state.
+- [x] **6F offline verification:** public synthetic Gold/BTC research and connected paper commands,
+  backend/frontend checks, evidence-mode displays and native Windows instructions.
+- [ ] **Remaining 6C/6F acceptance:** one shared production-worker/historical application service
+  for every admission/lifecycle/risk step, durable checkpoint/resume of complete derived workflow
+  state, longer bounded-memory soak, and destination Windows recovery evidence.
+
+These remaining gates do not reopen the demonstrated P5 defects, but they prevent a claim of full
+live-style parity or operational readiness. Licensed market data, genuine contemporaneous provider
+outputs and elapsed forward observation remain unavailable.
+
+## Phase 7 — derivatives/optional execution (separate approval; deferred)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.
 20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's current scope.
 
