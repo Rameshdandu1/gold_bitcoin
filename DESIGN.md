@@ -1,6 +1,6 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: Design v0.5 / research-completion MVP. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: v0.5 implementation / Phase 6 acceptance corrections pending. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
@@ -14,11 +14,13 @@ trades per symbol and 2,000 candles per symbol/resolution and invokes the produc
 `detect_signal` function for all six engines. It never has a provider, notification, account or
 order transport.
 
-Candidates, four-arm decisions and their exact target/configuration identities are immutable
-records. Decisions are stored before the evaluator reads the journal-backed future quote path.
-Executable outcomes reuse bid/ask, tick, multiplier, fee, slippage, funding and gap policies.
-Ordinary evaluation selects one revision per opportunity and excludes label intervals that enter
-the frozen holdout. Protected holdout access is a separate recorded command.
+Candidates, four-arm decisions and their target/configuration identities are immutable records.
+The current implementation derives provider decisions after reading the journal, then evaluates
+quotes. The independent review found that this loses availability clocks/provenance and does not
+reapply the full shared current-risk/lifecycle policy. Quote-side economics are implemented, but
+pre-entry and OHLC coverage gaps remain. Ordinary aggregate evaluation selects one revision per
+opportunity and excludes label intervals entering the frozen holdout; ordinary opportunity detail
+reads still require the same protection. A separate final-holdout command alone is insufficient.
 
 Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
 hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,
@@ -26,11 +28,36 @@ seed and variant policy. Checkpoints bind both hashes and validate the consumed 
 retaining only the most recent 128 diagnostic event IDs. Conflicting writes fail instead of
 overwriting scientific history.
 
-The paper ledger binds candidate, revision, arm, target, configuration, source identity/generation,
-decision persistence time and eligible-entry time. Prospective entries/outcomes must occur after
-the decision write and be factually available before recording. Historical import remains a
-distinct evidence mode. The worker advances a source-bound cursor after each idempotent event and
-detects replacement or truncation.
+The paper ledger binds candidate, revision, arm, target, configuration, declared source identity,
+decision persistence time and eligible-entry time. It rejects several backfill/future-outcome cases.
+The local JSON worker stores generation/count cursor metadata separately from each transition;
+crashes between those commits and same-length file replacement remain unresolved. Its current
+import interface is not yet the connected observation-to-paper-outcome service required for
+acceptance. Historical imports must remain distinct from genuine prospective evidence.
+
+## Phase 6 acceptance contracts
+
+Implement [CODEX_PHASE_6.md](prompts/CODEX_PHASE_6.md) against the
+[independent Phase 5 review](docs/audits/phase-5-independent-review.md):
+
+- Obtain fresh evaluation and authorization time; align evidence tokens with evaluated facts and
+  check expiry, lease and freshness after acquiring the authorization transaction. Keep network
+  delivery outside that transaction.
+- Apply pre-dispatch lifecycle/source/deadline checks to legacy and current-format jobs. Missing
+  frozen legacy request policy requires an explicit migration/disposition.
+- Preserve event/completion, receipt/availability and persistence clocks through research arms and
+  fills. Validate evidence-mode compatibility; retain actual provider/request provenance.
+- Share admission, material revision, lifecycle and market-risk policy across real live-style,
+  historical and paper entry points, including expiry/freshness during input silence.
+- Prove continuous required path coverage and keep missing intervals incomplete. Derive paper
+  outcomes from later evidence; commit transitions with source progress and verify consumed input
+  identity across restart/rotation.
+- Apply one protected-partition policy to details, APIs, exports and aggregate reports. Final
+  access opens and records the holdout; ordinary authenticated reads must not reveal it first.
+
+These are implementation requirements, not claims that the current v0.5 code already satisfies
+them. Existing detector reuse, bounded feature windows, immutable records and isolated databases
+remain useful foundations. Full-workflow resume and bounded total memory require separate proof.
 
 ## Phase 4 foundation
 
@@ -50,13 +77,13 @@ units are versioned, and required funding fails closed. Outcomes preserve `NO_EN
 time exit, `AMBIGUOUS` and `INCOMPLETE`. Folds keep all opportunity revisions/arms together and
 purge overlapping label-information intervals with a time embargo.
 
-**Independent review:** the [independent Phase 4 review](docs/audits/phase-4-independent-review.md)
-identified the correctness and workflow gaps assigned to Phase 5. Those findings now have the
-regression coverage and implementation evidence recorded in
-[phase-5-verification.md](docs/audits/phase-5-verification.md). Architectural requirements remain
-distinct from empirical acceptance: live providers, licensed data, prospective duration and
-destination deployment are not proven by fixtures. Passing fixtures are not evidence of live
-provider readiness or strategy performance.
+**Independent review:** [phase-5-verification.md](docs/audits/phase-5-verification.md) records the
+implementation team's executed checks. The later
+[Phase 5 independent review](docs/audits/phase-5-independent-review.md) verifies substantial fixes
+and qualifies their remaining acceptance boundaries. Architectural requirements remain distinct
+from empirical acceptance: live providers, licensed data, prospective duration and destination
+deployment are not proven by fixtures. Passing fixtures are not evidence of live provider readiness
+or strategy performance.
 
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.
