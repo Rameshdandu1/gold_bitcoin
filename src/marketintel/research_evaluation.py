@@ -1,0 +1,485 @@
+"""Execution-aware historical outcomes and leakage-safe arm comparisons."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Iterable
+from datetime import datetime, timedelta
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from random import Random
+
+from marketintel.research_models import (
+    ArmDecision,
+    ArmRecord,
+    CostPolicy,
+    ExecutableQuote,
+    InstrumentVersion,
+    OpportunityRecord,
+    PriceBar,
+    ResearchCandidate,
+    ResearchOutcome,
+)
+
+
+def _ticks(value: Decimal, tick: Decimal, rounding: str) -> Decimal:
+    return (value / tick).to_integral_value(rounding=rounding) * tick
+
+
+def _entry_fill(
+    candidate: ResearchCandidate, quote: ExecutableQuote, policy: CostPolicy, tick: Decimal
+) -> Decimal:
+    slip = policy.slippage_bps_per_side / Decimal(10_000)
+    if candidate.direction == "BULLISH":
+        return _ticks(quote.ask * (1 + slip), tick, ROUND_CEILING)
+    return _ticks(quote.bid * (1 - slip), tick, ROUND_FLOOR)
+
+
+def _exit_fill(
+    candidate: ResearchCandidate, raw: Decimal, policy: CostPolicy, tick: Decimal
+) -> Decimal:
+    slip = policy.slippage_bps_per_side / Decimal(10_000)
+    if candidate.direction == "BULLISH":
+        return _ticks(raw * (1 - slip), tick, ROUND_FLOOR)
+    return _ticks(raw * (1 + slip), tick, ROUND_CEILING)
+
+
+def _outcome(
+    candidate: ResearchCandidate,
+    decision: ArmDecision,
+    target_index: int,
+    code: str,
+    reason: str,
+    *,
+    events: tuple[str, ...] = (),
+    complete: bool,
+    entry_at: datetime | None = None,
+    exit_at: datetime | None = None,
+    entry: Decimal | None = None,
+    exit: Decimal | None = None,
+    policy: CostPolicy | None = None,
+    instrument: InstrumentVersion | None = None,
+    favorable_excursion: Decimal | None = None,
+    adverse_excursion: Decimal | None = None,
+) -> ResearchOutcome:
+    gross_distance = gross = cost = net = net_r = None
+    if entry is not None and exit is not None and policy is not None and instrument is not None:
+        sign = Decimal(1) if candidate.direction == "BULLISH" else Decimal(-1)
+        gross_distance = sign * (exit - entry)
+        units = policy.quantity_contracts * instrument.contract_multiplier
+        gross = gross_distance * units
+        fee_rate = policy.fee_bps_per_side / Decimal(10_000)
+        cost = (entry + exit) * units * fee_rate
+        if policy.funding_bps is not None:
+            cost += entry * units * policy.funding_bps / Decimal(10_000)
+        net = gross - cost
+        risk = abs(entry - candidate.invalidation) * units
+        net_r = net / risk if risk else None
+    return ResearchOutcome(
+        opportunity_id=candidate.opportunity_id,
+        arm=decision.arm,
+        target_index=target_index,
+        code=code,
+        reason=reason,
+        decision_ready_at_utc=decision.ready_at_utc,
+        entry_at_utc=entry_at,
+        exit_at_utc=exit_at,
+        entry_price=entry,
+        exit_price=exit,
+        gross_price_distance=gross_distance,
+        gross_pnl=gross,
+        total_cost=cost,
+        net_pnl=net,
+        net_r=net_r,
+        favorable_excursion=favorable_excursion,
+        adverse_excursion=adverse_excursion,
+        supporting_event_ids=events,
+        data_complete=complete,
+    )
+
+
+def evaluate_quotes(
+    candidate: ResearchCandidate,
+    decision: ArmDecision,
+    instrument: InstrumentVersion,
+    quotes: Iterable[ExecutableQuote],
+    policy: CostPolicy,
+    *,
+    target_index: int = 1,
+) -> ResearchOutcome:
+    """Evaluate against ordered executable quotes using each arm's real ready time."""
+    if target_index < 1 or target_index > len(candidate.targets):
+        raise ValueError("Target identity is the original one-based candidate index")
+    if instrument.venue != candidate.venue or instrument.symbol != candidate.symbol:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "INSTRUMENT_IDENTITY_MISMATCH",
+            complete=False,
+        )
+    if instrument.product_id != candidate.product_id:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "PRODUCT_VERSION_MISMATCH",
+            complete=False,
+        )
+    if decision.state != "APPROVED":
+        code = "NO_ENTRY" if decision.state in {"REJECTED", "WAIT"} else "INCOMPLETE"
+        return _outcome(
+            candidate, decision, target_index, code, decision.reason, complete=code == "NO_ENTRY"
+        )
+    ready = decision.ready_at_utc + timedelta(milliseconds=decision.provider_latency_ms)
+    if ready > candidate.expires_at_utc:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "NO_ENTRY",
+            "DECISION_READY_AFTER_EXPIRY",
+            complete=True,
+        )
+    ordered = sorted(quotes, key=lambda row: (row.observed_at_utc, row.event_id))
+    relevant = [
+        row
+        for row in ordered
+        if row.venue == candidate.venue
+        and row.symbol == candidate.symbol
+        and ready <= row.observed_at_utc <= candidate.expires_at_utc
+    ]
+    if not relevant:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "NO_EXECUTABLE_QUOTE_BEFORE_EXPIRY",
+            complete=False,
+        )
+    first = relevant[0]
+    if (first.observed_at_utc - ready).total_seconds() > policy.maximum_quote_gap_seconds:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "ENTRY_QUOTE_GAP_EXCEEDED",
+            events=(first.event_id,),
+            complete=False,
+        )
+    if not (
+        instrument.valid_from_utc <= first.observed_at_utc
+        and (instrument.valid_to_utc is None or first.observed_at_utc < instrument.valid_to_utc)
+    ):
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "INSTRUMENT_VERSION_NOT_ACTIVE",
+            events=(first.event_id,),
+            complete=False,
+        )
+    entry = _entry_fill(candidate, first, policy, instrument.tick_size)
+    target = candidate.targets[target_index - 1]
+    risk_breached_at_entry = (
+        entry >= candidate.invalidation
+        if candidate.direction == "BEARISH"
+        else entry <= candidate.invalidation
+    )
+    target_passed_at_entry = (
+        entry <= target if candidate.direction == "BEARISH" else entry >= target
+    )
+    if risk_breached_at_entry or target_passed_at_entry:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "NO_ENTRY",
+            "GEOMETRY_ALREADY_PASSED_AT_ENTRY",
+            events=(first.event_id,),
+            complete=True,
+        )
+    favorable = Decimal(0)
+    adverse = Decimal(0)
+    for quote in relevant:
+        if candidate.direction == "BULLISH":
+            hit_target = quote.bid >= target
+            hit_stop = quote.bid <= candidate.invalidation
+            raw_exit = quote.bid
+            favorable = max(favorable, quote.bid - entry)
+            adverse = max(adverse, entry - quote.bid)
+        else:
+            hit_target = quote.ask <= target
+            hit_stop = quote.ask >= candidate.invalidation
+            raw_exit = quote.ask
+            favorable = max(favorable, entry - quote.ask)
+            adverse = max(adverse, quote.ask - entry)
+        if hit_target or hit_stop:
+            code = "TARGET_BEFORE_STOP" if hit_target else "STOP_BEFORE_TARGET"
+            exit_fill = _exit_fill(candidate, raw_exit, policy, instrument.tick_size)
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                code,
+                "ORDERED_EXECUTABLE_QUOTE",
+                events=(first.event_id, quote.event_id),
+                complete=True,
+                entry_at=first.observed_at_utc,
+                exit_at=quote.observed_at_utc,
+                entry=entry,
+                exit=exit_fill,
+                policy=policy,
+                instrument=instrument,
+                favorable_excursion=favorable,
+                adverse_excursion=adverse,
+            )
+    last = relevant[-1]
+    if last.observed_at_utc < candidate.expires_at_utc:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "INCOMPLETE",
+            "PATH_DOES_NOT_REACH_EXPIRY",
+            events=(first.event_id, last.event_id),
+            complete=False,
+            entry_at=first.observed_at_utc,
+            entry=entry,
+            favorable_excursion=favorable,
+            adverse_excursion=adverse,
+        )
+    raw_exit = last.bid if candidate.direction == "BULLISH" else last.ask
+    exit_fill = _exit_fill(candidate, raw_exit, policy, instrument.tick_size)
+    return _outcome(
+        candidate,
+        decision,
+        target_index,
+        "TIME_EXIT",
+        "EXECUTABLE_QUOTE_AT_EXPIRY",
+        events=(first.event_id, last.event_id),
+        complete=True,
+        entry_at=first.observed_at_utc,
+        exit_at=last.observed_at_utc,
+        entry=entry,
+        exit=exit_fill,
+        policy=policy,
+        instrument=instrument,
+        favorable_excursion=favorable,
+        adverse_excursion=adverse,
+    )
+
+
+def evaluate_bar_path(
+    candidate: ResearchCandidate,
+    decision: ArmDecision,
+    bars: Iterable[PriceBar],
+    *,
+    target_index: int = 1,
+) -> ResearchOutcome:
+    """Classify OHLC-only paths; never invent ordering inside a bar."""
+    if target_index < 1 or target_index > len(candidate.targets):
+        raise ValueError("Target identity is the original one-based candidate index")
+    target = candidate.targets[target_index - 1]
+    for bar in sorted(bars, key=lambda row: (row.end_utc, row.event_id)):
+        if bar.venue != candidate.venue or bar.symbol != candidate.symbol:
+            continue
+        if bar.end_utc < decision.ready_at_utc or bar.start_utc > candidate.expires_at_utc:
+            continue
+        target_hit = bar.high >= target if candidate.direction == "BULLISH" else bar.low <= target
+        stop_hit = (
+            bar.low <= candidate.invalidation
+            if candidate.direction == "BULLISH"
+            else bar.high >= candidate.invalidation
+        )
+        if target_hit and stop_hit:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "AMBIGUOUS",
+                "TARGET_AND_STOP_WITHIN_SAME_BAR",
+                events=(bar.event_id,),
+                complete=bar.complete,
+            )
+        if target_hit or stop_hit:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "TARGET_BEFORE_STOP" if target_hit else "STOP_BEFORE_TARGET",
+                "OHLC_PATH_WITHOUT_EXECUTABLE_FILL",
+                events=(bar.event_id,),
+                complete=bar.complete,
+            )
+    return _outcome(
+        candidate, decision, target_index, "INCOMPLETE", "OHLC_PATH_INCOMPLETE", complete=False
+    )
+
+
+def purged_folds(
+    opportunities: Iterable[OpportunityRecord],
+    *,
+    fold_count: int,
+    embargo_seconds: int = 0,
+    holdout_start: datetime | None = None,
+) -> list[dict[str, tuple[str, ...]]]:
+    """Chronological grouped folds; revisions/arms never cross partitions."""
+    if fold_count < 2:
+        raise ValueError("At least two folds are required")
+    grouped: dict[str, list[OpportunityRecord]] = defaultdict(list)
+    for row in opportunities:
+        grouped[row.opportunity_id].append(row)
+    groups = sorted(grouped.items(), key=lambda pair: min(x.observed_at_utc for x in pair[1]))
+    holdout = [
+        item
+        for item in groups
+        if holdout_start is not None and min(x.observed_at_utc for x in item[1]) >= holdout_start
+    ]
+    groups = [item for item in groups if item not in holdout]
+    if len(groups) < fold_count:
+        raise ValueError("Insufficient opportunity groups for requested folds")
+    folds: list[dict[str, tuple[str, ...]]] = []
+    for fold in range(fold_count):
+        start = len(groups) * fold // fold_count
+        end = len(groups) * (fold + 1) // fold_count
+        test = groups[start:end]
+        test_start = min(x.label_information_start_utc for _, rows in test for x in rows)
+        test_end = max(x.label_information_end_utc for _, rows in test for x in rows)
+        embargo = timedelta(seconds=embargo_seconds)
+        train = []
+        purged = []
+        for opportunity_id, rows in groups[:start] + groups[end:]:
+            overlaps = any(
+                row.label_information_start_utc <= test_end + embargo
+                and row.label_information_end_utc >= test_start - embargo
+                for row in rows
+            )
+            (purged if overlaps else train).append(opportunity_id)
+        folds.append(
+            {
+                "train": tuple(train),
+                "test": tuple(key for key, _ in test),
+                "purged": tuple(purged),
+                "holdout": tuple(key for key, _ in holdout),
+            }
+        )
+    return folds
+
+
+def arm_metrics(opportunities: Iterable[OpportunityRecord]) -> dict[str, dict]:
+    """Preserve abstention denominators and mark small samples insufficient."""
+    by_arm: dict[str, list[ArmRecord]] = defaultdict(list)
+    total = 0
+    for opportunity in opportunities:
+        total += 1
+        for arm in opportunity.arms:
+            by_arm[arm.arm].append(arm)
+    result: dict[str, dict] = {}
+    for arm, records in sorted(by_arm.items()):
+        outcomes = [row.outcome for row in records if row.outcome is not None]
+        complete = [row for row in outcomes if row.data_complete and row.net_pnl is not None]
+        gains = sum((row.net_pnl for row in complete if row.net_pnl > 0), Decimal(0))
+        losses = -sum((row.net_pnl for row in complete if row.net_pnl < 0), Decimal(0))
+        result[arm] = {
+            "opportunity_denominator": total,
+            "observed_records": len(records),
+            "unavailable": sum(row.state == "UNAVAILABLE" for row in records),
+            "rejected_or_wait": sum(row.state in {"REJECTED", "WAIT"} for row in records),
+            "complete_executions": len(complete),
+            "latency_ms_total": sum(row.provider_latency_ms for row in records),
+            "attributable_cost_microusd": sum(row.attributable_cost_microusd for row in records),
+            "net_pnl": str(sum((row.net_pnl for row in complete), Decimal(0))),
+            "mean_favorable_excursion": (
+                str(
+                    sum(
+                        (row.favorable_excursion or Decimal(0) for row in complete),
+                        Decimal(0),
+                    )
+                    / len(complete)
+                )
+                if complete
+                else None
+            ),
+            "mean_adverse_excursion": (
+                str(
+                    sum(
+                        (row.adverse_excursion or Decimal(0) for row in complete),
+                        Decimal(0),
+                    )
+                    / len(complete)
+                )
+                if complete
+                else None
+            ),
+            "profit_factor": str(gains / losses) if losses > 0 else None,
+            "classification": "EXPLORATORY" if len(complete) >= 30 else "INSUFFICIENT_DATA",
+            "warning": "Hypothetical research output; not a probability or profitability claim.",
+        }
+    return result
+
+
+def paired_day_block_difference(
+    opportunities: Iterable[OpportunityRecord],
+    baseline_arm: str,
+    comparison_arm: str,
+    *,
+    minimum_days: int = 10,
+    samples: int = 2_000,
+    seed: int = 0,
+) -> dict:
+    """Deterministic day-block paired interval; unavailable pairs stay in the denominator."""
+    day_values: dict[str, list[Decimal]] = defaultdict(list)
+    denominator = 0
+    paired = 0
+    for opportunity in opportunities:
+        denominator += 1
+        arms = {row.arm: row for row in opportunity.arms}
+        baseline = arms.get(baseline_arm)
+        comparison = arms.get(comparison_arm)
+        if (
+            baseline is None
+            or comparison is None
+            or baseline.outcome is None
+            or comparison.outcome is None
+            or baseline.outcome.net_pnl is None
+            or comparison.outcome.net_pnl is None
+            or not baseline.outcome.data_complete
+            or not comparison.outcome.data_complete
+        ):
+            continue
+        paired += 1
+        day = opportunity.label_information_end_utc.date().isoformat()
+        day_values[day].append(comparison.outcome.net_pnl - baseline.outcome.net_pnl)
+    day_means = [sum(values, Decimal(0)) / len(values) for _, values in sorted(day_values.items())]
+    if len(day_means) < minimum_days:
+        return {
+            "classification": "INSUFFICIENT_DATA",
+            "opportunity_denominator": denominator,
+            "paired_opportunities": paired,
+            "independent_day_blocks": len(day_means),
+            "interval": None,
+        }
+    random = Random(seed)
+    estimates = []
+    for _ in range(samples):
+        selected = [random.choice(day_means) for _ in day_means]
+        estimates.append(sum(selected, Decimal(0)) / len(selected))
+    estimates.sort()
+    return {
+        "classification": "EXPLORATORY",
+        "opportunity_denominator": denominator,
+        "paired_opportunities": paired,
+        "independent_day_blocks": len(day_means),
+        "mean_difference": str(sum(day_means, Decimal(0)) / len(day_means)),
+        "interval": {
+            "lower_2_5_percent": str(estimates[int(samples * 0.025)]),
+            "upper_97_5_percent": str(estimates[min(samples - 1, int(samples * 0.975))]),
+            "method": "deterministic paired day-block bootstrap",
+        },
+        "warning": "Exploratory difference, not a probability or profitability claim.",
+    }

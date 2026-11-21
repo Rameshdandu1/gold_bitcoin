@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from marketintel.ai import ClaudeAnalyst, GPTAnalyst, independent_review
-from marketintel.analysis import build_analysis_envelope
+from marketintel.analysis import build_analysis_envelope, material_proposal_digest
 from marketintel.coinglass import CoinGlassV4, unavailable_context
 from marketintel.config import Settings
 from marketintel.consensus import decide
@@ -221,11 +221,13 @@ async def poll_closed_candles(
                 ]
                 if resolution == "1m":
                     rest_closed = finalized_candles(history, resolution="1m", through=decision_now)
+                    closed_minute = decision_now.replace(second=0, microsecond=0)
+                    reconciliation_start = closed_minute - timedelta(minutes=65)
                     raw_trades = await asyncio.to_thread(
                         store.raw_events,
                         symbol=symbol,
                         channels=("trades",),
-                        start=decision_now - timedelta(minutes=base_minutes * 65),
+                        start=reconciliation_start,
                         end=decision_now,
                         received_end=decision_now,
                     )
@@ -239,19 +241,29 @@ async def poll_closed_candles(
                         )
                     else:
                         first = replayed[0].open_time
-                        rest_overlap = [
-                            candle for candle in rest_closed if candle.open_time >= first
-                        ]
-                        result = reconcile_candles(rest_overlap, replayed)
-                        detail = (
-                            f"matched={result.matched}; "
-                            f"missing_stream={len(result.missing_from_stream)}; "
-                            f"missing_rest={len(result.missing_from_rest)}; "
-                            f"mismatched={len(result.mismatched)}"
-                        )
-                        store.record_source_status(
-                            service, "VALID" if result.valid else "INVALID", detail
-                        )
+                        coverage_end = replayed[-1].open_time + timedelta(minutes=1)
+                        if not store.source_interval_covered(
+                            "delta_websocket", start=first, end=coverage_end
+                        ):
+                            store.record_source_status(
+                                service,
+                                "WAIT",
+                                "Stream collector coverage is incomplete for reconciliation",
+                            )
+                        else:
+                            rest_overlap = [
+                                candle for candle in rest_closed if candle.open_time >= first
+                            ]
+                            result = reconcile_candles(rest_overlap, replayed)
+                            detail = (
+                                f"matched={result.matched}; "
+                                f"missing_stream={len(result.missing_from_stream)}; "
+                                f"missing_rest={len(result.missing_from_rest)}; "
+                                f"mismatched={len(result.mismatched)}"
+                            )
+                            store.record_source_status(
+                                service, "VALID" if result.valid else "INVALID", detail
+                            )
                 if isinstance(engine, QuantEngineConfig) and isinstance(market, Instrument):
                     discovery_source = f"product_discovery:{engine.asset}"
                     if not store.source_is_eligible(
@@ -360,8 +372,7 @@ async def poll_closed_candles(
                             occurred_at=result.candidate.observed_at_utc,
                             reason="Deterministic M2 candidate; NOT AI CONFIRMED",
                         )
-                        created = store.add_candidate_with_lifecycle(result.candidate, initial)
-                        if created and settings.ai_enabled and result.snapshot is not None:
+                        if settings.ai_enabled and result.snapshot is not None:
                             analysis = build_analysis_envelope(
                                 result.candidate,
                                 result.snapshot,
@@ -384,26 +395,43 @@ async def poll_closed_candles(
                                 + timedelta(seconds=settings.ai_total_deadline_seconds),
                             )
                             if deadline > decision_now:
-                                store.create_review_run(
+                                admission, _ = store.admit_candidate_review(
+                                    result.candidate,
+                                    initial,
                                     analysis,
+                                    material_digest=material_proposal_digest(
+                                        result.candidate, result.snapshot
+                                    ),
                                     provider_config={
                                         "openai_model": settings.openai_model,
                                         "anthropic_model": settings.anthropic_model,
+                                        "max_output_tokens": settings.ai_max_output_tokens,
+                                        "prompt_version": analysis.envelope.prompt_version,
+                                        "schema_version": analysis.envelope.schema_version,
+                                        "risk_policy_version": (
+                                            analysis.envelope.risk_policy_version
+                                        ),
                                     },
                                     deadline_at=deadline,
                                     now=decision_now,
                                 )
-                                store.set_status(
-                                    engine.engine,
-                                    "REVIEW_QUEUED",
-                                    "Immutable revision queued for dual independent review",
-                                )
-                        elif created and settings.ai_enabled:
+                                if admission != "UNCHANGED":
+                                    store.set_status(
+                                        engine.engine,
+                                        "REVIEW_QUEUED",
+                                        "Immutable revision queued for dual independent review",
+                                    )
+                        elif settings.ai_enabled:
+                            created = store.add_candidate_with_lifecycle(result.candidate, initial)
+                            if not created:
+                                continue
                             store.set_status(
                                 engine.engine,
                                 "CANDIDATE_UNREVIEWED",
                                 "Canonical feature snapshot unavailable; no AI call scheduled",
                             )
+                        else:
+                            store.add_candidate_with_lifecycle(result.candidate, initial)
                     # No order execution exists; review and alerts run in durable workers.
                     continue
 

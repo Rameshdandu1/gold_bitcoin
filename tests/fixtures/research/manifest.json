@@ -1,0 +1,47 @@
+{
+  "schema_version": "1",
+  "dataset_id": "fixture-dataset-001",
+  "content_hash": "71daa655b918181d8499527e85fdaa907ee7793f899347ce199927fc554e5c7f",
+  "code_commit": "d1978d30e48c0b8656d969da00ea70a7e4659562",
+  "rule_version": "phase4-fixture-rules-v1",
+  "feature_version": "phase4-fixture-features-v1",
+  "created_at_utc": "2026-01-02T10:00:00Z",
+  "data_mode": "SYNTHETIC_FIXTURE",
+  "provenance": "Small deterministic software-verification fixture; not empirical market evidence.",
+  "license_notes": "Repository test fixture only.",
+  "files": [
+    {
+      "path": "observations.jsonl",
+      "sha256": "71daa655b918181d8499527e85fdaa907ee7793f899347ce199927fc554e5c7f",
+      "record_count": 2
+    }
+  ],
+  "instruments": [
+    {
+      "venue": "delta_india",
+      "symbol": "BTCUSD",
+      "product_id": 27,
+      "valid_from_utc": "2026-01-01T00:00:00Z",
+      "valid_to_utc": null,
+      "contract_multiplier": "0.001",
+      "tick_size": "0.5",
+      "quote_currency": "USD",
+      "base_currency": "BTC",
+      "settlement_currency": "USD"
+    }
+  ],
+  "coverage": [
+    {
+      "source": "fixture",
+      "symbol": "BTCUSD",
+      "start_utc": "2026-01-02T10:00:00Z",
+      "end_utc": "2026-01-02T10:03:00Z",
+      "record_count": 2,
+      "gaps": [],
+      "sequence_valid": true,
+      "checksum_valid": true,
+      "duplicate_count": 0,
+      "exclusions": ["Synthetic fixture; no real market coverage"]
+    }
+  ]
+}

@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 The project uses four-part release versions for shipped milestones.
 
+## [0.4.0.0] - 2026-11-21
+
+### Added
+
+- Versioned dataset manifests, source gaps, availability-clock replay and deterministic checkpoint
+  resume in an isolated experiment database.
+- Arm-specific entry timing, executable quote-side fills, versioned instrument/cost inputs,
+  ambiguous/incomplete outcomes, common cohorts and interval-purged folds.
+- Immutable write-before-outcome paper state, a bounded default-off worker, authenticated research
+  views and checksummed spreadsheet-safe exports.
+
+### Fixed
+
+- Close review findings P3-01 through P3-10 and finalization/deadline/non-ASCII authentication gaps
+  while preserving successful and fail-closed paths.
+
+### Evidence and safety
+
+- The committed two-record dataset is a synthetic software fixture. No adequate empirical dataset,
+  weeks of paper observation, accuracy or profitability claim exists.
+- No paid provider request, real notification, exchange account, order route or deployment was used.
+
 ## [0.3.0.0] - 2026-11-21
 
 ### Added

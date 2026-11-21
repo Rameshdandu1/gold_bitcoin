@@ -1,0 +1,38 @@
+.nav-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.research-page {
+  min-height: 620px;
+}
+
+.research-cards {
+  margin-top: 20px;
+}
+
+.metric {
+  color: #9cc2ff;
+  font-size: 36px;
+  font-weight: 700;
+  margin: 22px 0 10px;
+}
+
+.research-notice {
+  min-height: 0;
+  margin-top: 18px;
+}
+
+.research-notice p,
+.research-empty p {
+  color: #91a6c1;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.research-empty {
+  min-height: 150px;
+  margin-top: 20px;
+}

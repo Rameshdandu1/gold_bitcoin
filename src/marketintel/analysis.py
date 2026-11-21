@@ -150,6 +150,18 @@ def candidate_revision_id(candidate: CandidateSignal) -> str:
     return hashlib.sha256(preimage).hexdigest()
 
 
+def material_proposal_digest(candidate: CandidateSignal, snapshot: FeatureSnapshot) -> str:
+    """Versioned identity for decision-relevant evidence, excluding poll-time refresh identity."""
+    candidate_values = candidate.model_dump(
+        mode="python", exclude={"snapshot_id", "observed_at_utc"}
+    )
+    snapshot_values = snapshot.model_dump(mode="python", exclude={"snapshot_id", "observed_at_utc"})
+    preimage = b"material-proposal-v1\0" + canonical_json_bytes(
+        {"candidate": candidate_values, "feature_snapshot": snapshot_values}
+    )
+    return hashlib.sha256(preimage).hexdigest()
+
+
 def build_analysis_envelope(
     candidate: CandidateSignal,
     snapshot: FeatureSnapshot,

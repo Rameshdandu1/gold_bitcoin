@@ -1,8 +1,9 @@
 """Environment-driven settings; live external services are OFF by default."""
 
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,12 +15,15 @@ class Settings(BaseSettings):
     ai_enabled: bool = False
     trading_enabled: bool = False
     alerts_enabled: bool = False
+    paper_collection_enabled: bool = False
 
     delta_rest_url: str = "https://api.india.delta.exchange"
     delta_ws_url: str = "wss://public-socket.india.delta.exchange"
     btc_symbol: str = "BTCUSD"
     gold_symbol: str = "XAUTUSD"
     database_path: Path = Path("data/marketintel.sqlite3")
+    research_database_path: Path = Path("data/research.sqlite3")
+    paper_database_path: Path = Path("data/paper.sqlite3")
     data_max_age_seconds: int = Field(default=180, ge=15, le=3600)
     delta_book_max_age_seconds: float = Field(default=10, ge=1, le=120)
     delta_discovery_refresh_seconds: int = Field(default=300, ge=30, le=3600)
@@ -66,6 +70,37 @@ class Settings(BaseSettings):
     coinglass_plan: str = Field(
         default="HOBBYIST", pattern="^(HOBBYIST|STARTUP|STANDARD|PROFESSIONAL|ENTERPRISE)$"
     )
+
+    @field_validator(
+        "openai_input_microusd_per_million_tokens",
+        "openai_output_microusd_per_million_tokens",
+        "anthropic_input_microusd_per_million_tokens",
+        "anthropic_output_microusd_per_million_tokens",
+        mode="before",
+    )
+    @classmethod
+    def blank_optional_rates_are_missing(cls, value: object) -> object:
+        """The distributed template uses blanks to mean deliberately unconfigured pricing."""
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator(
+        "risk_fee_bps",
+        "risk_slippage_bps",
+        "risk_maximum_entry_drift_bps",
+        "risk_maximum_spread_bps",
+        "risk_minimum_net_reward_risk",
+    )
+    @classmethod
+    def finite_non_negative_decimal_settings(cls, value: str) -> str:
+        if value == "":
+            return value
+        try:
+            parsed = Decimal(value)
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("Risk settings must be finite decimal values") from exc
+        if not parsed.is_finite() or parsed < 0:
+            raise ValueError("Risk settings must be finite non-negative decimal values")
+        return value
 
     @model_validator(mode="after")
     def block_execution(self) -> "Settings":

@@ -1,17 +1,32 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
+## Phase 4 research infrastructure
+
+Phase 4 adds offline, evidence-versioned historical replay and a prospective paper ledger. The
+research path uses separate SQLite files and has no provider, notification, account or order client.
+It does not establish strategy accuracy or profitability: the committed dataset is a two-record
+synthetic fixture used only to verify software behavior. Genuine historical AI assessments remain
+`UNAVAILABLE`; missing evidence is never replaced by invented model decisions.
+
+```powershell
+.\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest tests\fixtures\research\manifest.json
+.\.venv\Scripts\python.exe -m marketintel.research replay --manifest tests\fixtures\research\manifest.json --config tests\fixtures\research\experiment.json --database data\research.sqlite3 --checkpoint data\fixture-checkpoint.json
+.\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
+```
+
+`PAPER_COLLECTION_ENABLED=false`, live ingestion, paid AI and alerts remain off by default.
+`TRADING_ENABLED=true` is rejected during settings validation.
+
 **Research-only Windows Server application.** Independent Gold/BTC short (30m), hourly (60m), and session (240m) candidate detection using **Delta Exchange India** market data; separate GPT and Claude reviews, fresh deterministic consensus, authenticated operator views and durable Slack notification intents. `CoinGlass` integration is optional and entitlement-aware.
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-21):** Phase 3 is merged and its 171-test baseline passes. The original
-session-history, repeated-first-break and future-availability examples are corrected. The
-[independent Phase 3 review](docs/audits/phase-3-independent-review.md) reproduced additional startup,
-reconciliation, provider-identity, revision-scheduling, risk-race, budget and alert-delivery defects.
-The next implementation is [CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md), beginning with mandatory
-4A corrections before historical evaluation and prospective paper research. These findings and
-instructions are not completed fixes. Live provider/model access, Slack delivery, Windows service
-installation, market-data soak and strategy performance remain unverified.
+**Review status (2026-11-21):** Phase 4 software and synthetic-fixture checks are implemented. The
+[independent Phase 3 findings](docs/audits/phase-3-independent-review.md) have regressions and fixes;
+availability replay, execution-aware labels, arm comparisons and prospective paper state are now
+present. Live provider/model entitlement, adequate licensed historical data, genuine historical AI
+assessments, Slack delivery, weeks of paper observation, Windows Server installation, market-data
+soak and strategy performance remain unverified.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,

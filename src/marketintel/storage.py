@@ -204,6 +204,7 @@ class Store:
                 );
             """)
             self._apply_phase3_migration(conn)
+            self._apply_phase4_integration_migration(conn)
             self._backfill_candidate_revision_identities(conn)
 
     def _apply_phase3_migration(self, conn: sqlite3.Connection) -> None:
@@ -393,6 +394,26 @@ class Store:
                     "observed_at_utc=?, generation=generation+1 WHERE candidate_id=?",
                     (revision_id, snapshot_id, observed_at, candidate_id_value),
                 )
+
+    def _apply_phase4_integration_migration(self, conn: sqlite3.Connection) -> None:
+        migration_id = "0004_phase4_integration_corrections"
+        if conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE migration_id=?", (migration_id,)
+        ).fetchone():
+            return
+        conn.executescript("""
+            CREATE TABLE candidate_material_proposals (
+                candidate_id TEXT PRIMARY KEY,
+                policy_version TEXT NOT NULL,
+                material_digest TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            );
+        """)
+        conn.execute(
+            "INSERT INTO schema_migrations VALUES (?, ?)",
+            (migration_id, datetime.now(UTC).isoformat()),
+        )
 
     def append_raw_event(self, event: RawMarketEvent) -> bool:
         """Persist once by deterministic event ID; duplicate delivery is harmless."""
@@ -832,6 +853,35 @@ class Store:
         fields = ("event_id", "occurred_at_utc", "source", "state", "detail")
         return [dict(zip(fields, row, strict=True)) for row in rows]
 
+    def source_interval_covered(
+        self,
+        source: str,
+        *,
+        start: datetime,
+        end: datetime,
+        healthy_states: tuple[str, ...] = ("CONNECTED",),
+    ) -> bool:
+        """Require a healthy state at interval start and no unhealthy transition through end."""
+        if start.tzinfo is None or end.tzinfo is None or end <= start:
+            raise ValueError("Coverage interval must be aware and increasing")
+        start_text = start.astimezone(UTC).isoformat()
+        end_text = end.astimezone(UTC).isoformat()
+        placeholders = ",".join("?" for _ in healthy_states)
+        with self._conn() as conn:
+            before = conn.execute(
+                "SELECT state FROM source_status_events WHERE source=? AND occurred_at_utc<=? "
+                "ORDER BY occurred_at_utc DESC, event_id DESC LIMIT 1",
+                (source, start_text),
+            ).fetchone()
+            if before is None or before[0] not in healthy_states:
+                return False
+            unhealthy = conn.execute(
+                f"SELECT 1 FROM source_status_events WHERE source=? AND occurred_at_utc>? "
+                f"AND occurred_at_utc<? AND state NOT IN ({placeholders}) LIMIT 1",
+                (source, start_text, end_text, *healthy_states),
+            ).fetchone()
+        return unhealthy is None
+
     def reserve_ai_calls(self, n: int, limit: int) -> bool:
         """Atomic across worker restarts; reservations count even failed attempts."""
         if n <= 0 or limit <= 0:
@@ -1008,6 +1058,150 @@ class Store:
             )
         return run_id
 
+    def admit_candidate_review(
+        self,
+        candidate: Candidate,
+        initial_event: CandidateLifecycleEvent,
+        analysis: CanonicalAnalysis,
+        *,
+        material_digest: str,
+        provider_config: dict,
+        deadline_at: datetime,
+        now: datetime,
+    ) -> tuple[str, str | None]:
+        """Atomically deduplicate observations or supersede and queue one exact revision."""
+        if (
+            analysis.envelope.candidate_id != candidate.candidate_id
+            or analysis.envelope.snapshot_id != candidate.snapshot_id
+            or initial_event.candidate_id != candidate.candidate_id
+            or initial_event.snapshot_id != candidate.snapshot_id
+        ):
+            raise ValueError("Candidate review identities do not match")
+        if deadline_at <= now:
+            raise ValueError("Review deadline must be in the future")
+        config_json = json.dumps(provider_config, sort_keys=True, separators=(",", ":"))
+        identity = "|".join(
+            [
+                analysis.envelope.candidate_revision_id,
+                analysis.digest,
+                analysis.envelope.prompt_version,
+                config_json,
+            ]
+        )
+        run_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        job_id = hashlib.sha256(f"review-job|{run_id}".encode()).hexdigest()
+        now_text = now.astimezone(UTC).isoformat()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            active_material = conn.execute(
+                "SELECT material_digest, revision_id FROM candidate_material_proposals "
+                "WHERE candidate_id=?",
+                (candidate.candidate_id,),
+            ).fetchone()
+            if active_material is not None and active_material[0] == material_digest:
+                return "UNCHANGED", None
+            conn.execute(
+                "INSERT OR IGNORE INTO candidates VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    candidate.candidate_id,
+                    now_text,
+                    candidate.symbol,
+                    candidate.asset,
+                    candidate.horizon_minutes,
+                    candidate.model_dump_json(),
+                ),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO candidate_revisions VALUES (?, ?, ?, ?)",
+                (
+                    candidate.candidate_id,
+                    candidate.snapshot_id,
+                    candidate.observed_at_utc.astimezone(UTC).isoformat(),
+                    candidate.model_dump_json(),
+                ),
+            )
+            revision_id = self._record_revision_identity(conn, candidate)
+            lifecycle_exists = conn.execute(
+                "SELECT 1 FROM candidate_lifecycle_events WHERE candidate_id=? LIMIT 1",
+                (candidate.candidate_id,),
+            ).fetchone()
+            if lifecycle_exists is None:
+                conn.execute(
+                    "INSERT INTO candidate_lifecycle_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        initial_event.event_id,
+                        initial_event.candidate_id,
+                        initial_event.snapshot_id,
+                        None,
+                        initial_event.to_state.value,
+                        initial_event.occurred_at_utc.astimezone(UTC).isoformat(),
+                        initial_event.reason[:500],
+                        initial_event.model_dump_json(),
+                    ),
+                )
+            conn.execute(
+                "UPDATE review_jobs SET status='SUPERSEDED', lease_owner=NULL, "
+                "lease_expires_at_utc=NULL, updated_at_utc=? WHERE run_id IN "
+                "(SELECT run_id FROM review_runs WHERE candidate_id=? AND revision_id<>?) "
+                "AND status IN ('QUEUED', 'CLAIMED', 'RESULTS_READY')",
+                (now_text, candidate.candidate_id, revision_id),
+            )
+            conn.execute(
+                "UPDATE review_runs SET status='SUPERSEDED' WHERE candidate_id=? "
+                "AND revision_id<>? AND status IN ('QUEUED', 'CLAIMED', 'RESULTS_READY')",
+                (candidate.candidate_id, revision_id),
+            )
+            conn.execute(
+                "INSERT INTO candidate_material_proposals "
+                "VALUES (?, 'material-proposal-v1', ?, ?, ?) "
+                "ON CONFLICT(candidate_id) DO UPDATE SET policy_version=excluded.policy_version, "
+                "material_digest=excluded.material_digest, revision_id=excluded.revision_id, "
+                "updated_at_utc=excluded.updated_at_utc",
+                (candidate.candidate_id, material_digest, revision_id, now_text),
+            )
+            existing_envelope = conn.execute(
+                "SELECT canonical_bytes FROM analysis_envelopes WHERE digest=?", (analysis.digest,)
+            ).fetchone()
+            if (
+                existing_envelope is not None
+                and bytes(existing_envelope[0]) != analysis.canonical_bytes
+            ):
+                raise ValueError("Conflicting canonical bytes for analysis digest")
+            conn.execute(
+                "INSERT OR IGNORE INTO analysis_envelopes VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    analysis.digest,
+                    candidate.candidate_id,
+                    revision_id,
+                    candidate.snapshot_id,
+                    analysis.envelope.schema_version,
+                    analysis.canonical_bytes,
+                    now_text,
+                ),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO review_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    candidate.candidate_id,
+                    revision_id,
+                    analysis.digest,
+                    analysis.envelope.prompt_version,
+                    analysis.envelope.schema_version,
+                    analysis.envelope.risk_policy_version,
+                    config_json,
+                    "QUEUED",
+                    now_text,
+                    deadline_at.astimezone(UTC).isoformat(),
+                ),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO review_jobs VALUES (?, ?, 'QUEUED', ?, NULL, NULL, 0, "
+                "NULL, ?, ?)",
+                (job_id, run_id, now_text, now_text, now_text),
+            )
+        return ("CREATED" if active_material is None else "SUPERSEDED"), run_id
+
     def claim_review_job(
         self, owner: str, *, now: datetime, lease_seconds: int = 60
     ) -> dict | None:
@@ -1018,30 +1212,57 @@ class Store:
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT job_id, run_id, lease_generation FROM review_jobs "
+                "SELECT job_id, run_id, status, lease_generation FROM review_jobs "
                 "WHERE available_at_utc<=? AND (status='QUEUED' OR "
-                "(status='CLAIMED' AND lease_expires_at_utc<?)) "
+                "(status IN ('CLAIMED', 'RESULTS_READY') AND lease_expires_at_utc<?)) "
                 "ORDER BY created_at_utc, job_id LIMIT 1",
                 (now_text, now_text),
             ).fetchone()
             if row is None:
                 return None
-            generation = int(row[2]) + 1
+            generation = int(row[3]) + 1
             changed = conn.execute(
-                "UPDATE review_jobs SET status='CLAIMED', lease_owner=?, "
+                "UPDATE review_jobs SET status=CASE WHEN status='RESULTS_READY' "
+                "THEN 'RESULTS_READY' ELSE 'CLAIMED' END, lease_owner=?, "
                 "lease_expires_at_utc=?, lease_generation=?, updated_at_utc=? "
                 "WHERE job_id=? AND lease_generation=?",
-                (owner, expires, generation, now_text, row[0], row[2]),
+                (owner, expires, generation, now_text, row[0], row[3]),
             )
             if changed.rowcount != 1:
                 return None
         return {
             "job_id": row[0],
             "run_id": row[1],
+            "claimed_from_status": row[2],
             "owner": owner,
             "generation": generation,
             "lease_expires_at_utc": expires,
         }
+
+    def review_job(self, job_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT job_id, run_id, status, lease_owner, lease_expires_at_utc, "
+                "lease_generation, dispatch_id FROM review_jobs WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(
+            zip(
+                (
+                    "job_id",
+                    "run_id",
+                    "status",
+                    "lease_owner",
+                    "lease_expires_at_utc",
+                    "lease_generation",
+                    "dispatch_id",
+                ),
+                row,
+                strict=True,
+            )
+        )
 
     def mark_review_dispatched(
         self,
@@ -1153,6 +1374,39 @@ class Store:
                 return None
         return attempt_id
 
+    def mark_review_results_ready(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        generation: int,
+        now: datetime,
+    ) -> bool:
+        """Make saved provider outputs recoverable without declaring decision completion."""
+        now_text = now.astimezone(UTC).isoformat()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            providers = conn.execute(
+                "SELECT COUNT(DISTINCT provider) FROM provider_attempts_v2 "
+                "WHERE run_id=(SELECT run_id FROM review_jobs WHERE job_id=?)",
+                (job_id,),
+            ).fetchone()[0]
+            if int(providers) != 2:
+                return False
+            cursor = conn.execute(
+                "UPDATE review_jobs SET status='RESULTS_READY', updated_at_utc=? "
+                "WHERE job_id=? AND status IN ('CLAIMED', 'DISPATCHED') "
+                "AND lease_owner=? AND lease_generation=? AND lease_expires_at_utc>=?",
+                (now_text, job_id, owner, generation, now_text),
+            )
+            if cursor.rowcount == 1:
+                conn.execute(
+                    "UPDATE review_runs SET status='RESULTS_READY' "
+                    "WHERE run_id=(SELECT run_id FROM review_jobs WHERE job_id=?)",
+                    (job_id,),
+                )
+        return cursor.rowcount == 1
+
     def provider_results(self, run_id: str) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
@@ -1227,13 +1481,18 @@ class Store:
             ).fetchone()
             health.append((source, *(row or (None, None, None))))
         book = conn.execute(
-            "SELECT updated_at_utc FROM book_checkpoints WHERE symbol=?",
+            "SELECT updated_at_utc, payload FROM book_checkpoints WHERE symbol=?",
             (candidate["symbol"],),
         ).fetchone()
         latest_trade = conn.execute(
             "SELECT received_at_utc, event_id FROM raw_market_events "
             "WHERE symbol=? AND channel='trades' "
             "ORDER BY received_at_utc DESC, event_id DESC LIMIT 1",
+            (candidate["symbol"],),
+        ).fetchone()
+        trade_generation = conn.execute(
+            "SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM raw_market_events "
+            "WHERE symbol=? AND channel='trades'",
             (candidate["symbol"],),
         ).fetchone()
         evidence = {
@@ -1245,7 +1504,11 @@ class Store:
             "price_watermark": watermark,
             "source_health": health,
             "book_checkpoint_at": book[0] if book else None,
+            "book_checkpoint_digest": (
+                hashlib.sha256(book[1].encode("utf-8")).hexdigest() if book else None
+            ),
             "latest_trade": latest_trade,
+            "trade_persistence_generation": tuple(trade_generation or (0, 0)),
         }
         token = hashlib.sha256(
             json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
@@ -1256,11 +1519,83 @@ class Store:
         with self._conn() as conn:
             return self._eligibility_token_in_transaction(conn, candidate_id_value)
 
+    def eligibility_snapshot_data(
+        self,
+        candidate_id_value: str,
+        *,
+        symbol: str,
+        observed_at: datetime,
+        through: datetime,
+    ) -> tuple[str, dict, list[RawMarketEvent], OrderBookAssembler | None] | None:
+        """Read risk facts and their commit token from one SQLite read snapshot."""
+        with self._conn() as conn:
+            conn.execute("BEGIN")
+            current = self._eligibility_token_in_transaction(conn, candidate_id_value)
+            if current is None:
+                return None
+            rows = conn.execute(
+                "SELECT event_id, schema_version, venue, symbol, channel, event_time_utc, "
+                "received_at_utc, publish_time_utc, sequence, checksum, payload "
+                "FROM raw_market_events WHERE symbol=? AND channel='trades' "
+                "AND event_time_utc>=? AND event_time_utc<? AND received_at_utc<=? "
+                "ORDER BY event_time_utc, COALESCE(sequence, -1), event_id",
+                (
+                    symbol,
+                    observed_at.astimezone(UTC).isoformat(),
+                    (through + timedelta(microseconds=1)).astimezone(UTC).isoformat(),
+                    through.astimezone(UTC).isoformat(),
+                ),
+            ).fetchall()
+            book_row = conn.execute(
+                "SELECT payload FROM book_checkpoints WHERE symbol=?", (symbol,)
+            ).fetchone()
+        events = [
+            RawMarketEvent(
+                event_id=row[0],
+                schema_version=row[1],
+                venue=row[2],
+                symbol=row[3],
+                channel=row[4],
+                event_time_utc=datetime.fromisoformat(row[5]),
+                received_at_utc=datetime.fromisoformat(row[6]),
+                publish_time_utc=datetime.fromisoformat(row[7]) if row[7] else None,
+                sequence=row[8],
+                checksum=row[9],
+                payload=json.loads(row[10]),
+            )
+            for row in rows
+        ]
+        book: OrderBookAssembler | None = None
+        if book_row is not None:
+            payload = json.loads(book_row[0])
+            book = OrderBookAssembler(symbol, max_age_seconds=float(payload["max_age_seconds"]))
+            book.asks = {Decimal(price): (str(price), str(size)) for price, size in payload["asks"]}
+            book.bids = {Decimal(price): (str(price), str(size)) for price, size in payload["bids"]}
+            book.last_sequence = payload["last_sequence"]
+            book.last_event_time_utc = (
+                datetime.fromisoformat(payload["last_event_time_utc"])
+                if payload["last_event_time_utc"]
+                else None
+            )
+            book.last_received_at_utc = (
+                datetime.fromisoformat(payload["last_received_at_utc"])
+                if payload.get("last_received_at_utc")
+                else None
+            )
+            book.valid = bool(payload["valid"])
+            book.reason = str(payload["reason"])
+        return current[0], current[1], events, book
+
     def commit_consensus_decision_and_outbox(
         self,
         decision: ConsensusDecisionV2,
         *,
         destination_id: str | None = None,
+        job_id: str | None = None,
+        lease_owner: str | None = None,
+        lease_generation: int | None = None,
+        deadline_at: datetime | None = None,
+        now: datetime | None = None,
     ) -> bool:
         """Conditionally commit a revision decision and its alert intent in one transaction."""
         with self._conn() as conn:
@@ -1270,6 +1605,37 @@ class Store:
                 return False
             token, evidence = current
             lifecycle = evidence["lifecycle"]
+            commit_time = now or decision.decided_at_utc
+            candidate_row = conn.execute(
+                "SELECT payload FROM candidate_revision_identities WHERE revision_id=?",
+                (decision.candidate_revision_id,),
+            ).fetchone()
+            if candidate_row is None:
+                return False
+            candidate_expiry = datetime.fromisoformat(
+                json.loads(candidate_row[0])["expires_at_utc"]
+            )
+            if commit_time >= candidate_expiry or (
+                deadline_at is not None and commit_time >= deadline_at
+            ):
+                return False
+            if job_id is not None:
+                if lease_owner is None or lease_generation is None:
+                    raise ValueError("Review finalization requires a complete lease identity")
+                lease = conn.execute(
+                    "SELECT run_id, status, lease_owner, lease_generation, lease_expires_at_utc "
+                    "FROM review_jobs WHERE job_id=?",
+                    (job_id,),
+                ).fetchone()
+                if (
+                    lease is None
+                    or lease[0] != decision.run_id
+                    or lease[1] != "RESULTS_READY"
+                    or lease[2] != lease_owner
+                    or int(lease[3]) != lease_generation
+                    or datetime.fromisoformat(lease[4]) < commit_time
+                ):
+                    return False
             if (
                 token != decision.eligibility.eligibility_token
                 or evidence["revision_id"] != decision.candidate_revision_id
@@ -1358,12 +1724,29 @@ class Store:
                         now_text,
                     ),
                 )
+            if job_id is not None:
+                conn.execute(
+                    "UPDATE review_jobs SET status='COMPLETED', lease_owner=NULL, "
+                    "lease_expires_at_utc=NULL, updated_at_utc=? WHERE job_id=?",
+                    (commit_time.astimezone(UTC).isoformat(), job_id),
+                )
+                conn.execute(
+                    "UPDATE review_runs SET status='COMPLETED' WHERE run_id=?",
+                    (decision.run_id,),
+                )
         return True
 
     def consensus_decision_v2(self, run_id: str) -> dict | None:
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT payload FROM consensus_decisions_v2 WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def consensus_decision_by_id(self, decision_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM consensus_decisions_v2 WHERE decision_id=?", (decision_id,)
             ).fetchone()
         return json.loads(row[0]) if row else None
 
@@ -1459,6 +1842,22 @@ class Store:
             return False, "terminal lifecycle intent is no longer current"
         return True, "eligible"
 
+    def mark_outbox_dispatch_started(self, item: dict, *, now: datetime) -> bool:
+        """Persist the point after which remote acceptance may be unknown after a crash."""
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE notification_outbox SET status='DISPATCH_STARTED', updated_at_utc=? "
+                "WHERE outbox_id=? AND status='CLAIMED' AND lease_owner=? "
+                "AND lease_generation=?",
+                (
+                    now.astimezone(UTC).isoformat(),
+                    item["outbox_id"],
+                    item["owner"],
+                    item["generation"],
+                ),
+            )
+        return cursor.rowcount == 1
+
     def finish_outbox_attempt(
         self,
         item: dict,
@@ -1476,7 +1875,8 @@ class Store:
                 "UPDATE notification_outbox SET status=?, attempts=attempts+1, "
                 "available_at_utc=?, lease_owner=NULL, lease_expires_at_utc=NULL, "
                 "receipt_id=?, last_error=?, updated_at_utc=? WHERE outbox_id=? "
-                "AND status='CLAIMED' AND lease_owner=? AND lease_generation=?",
+                "AND status IN ('CLAIMED', 'DISPATCH_STARTED') "
+                "AND lease_owner=? AND lease_generation=?",
                 (
                     status,
                     (retry_at or now).astimezone(UTC).isoformat(),
@@ -1548,7 +1948,10 @@ class Store:
             ).fetchone()[0]
             totals = conn.execute(
                 "SELECT COALESCE(SUM(reserved_calls), 0), "
-                "COALESCE(SUM(reserved_cost_microusd), 0) FROM budget_ledger WHERE day_utc=?",
+                "COALESCE(SUM(CASE "
+                "WHEN status='RECONCILED' AND actual_cost_microusd IS NOT NULL "
+                "THEN actual_cost_microusd ELSE reserved_cost_microusd END), 0) "
+                "FROM budget_ledger WHERE day_utc=?",
                 (day,),
             ).fetchone()
             if (
@@ -1974,7 +2377,10 @@ class Store:
                 "SELECT COALESCE(SUM(reserved_calls), 0), "
                 "COALESCE(SUM(reserved_cost_microusd), 0), "
                 "COALESCE(SUM(actual_cost_microusd), 0), "
-                "SUM(CASE WHEN status='USAGE_UNKNOWN' THEN 1 ELSE 0 END) "
+                "SUM(CASE WHEN status='USAGE_UNKNOWN' THEN 1 ELSE 0 END), "
+                "COALESCE(SUM(CASE "
+                "WHEN status='RECONCILED' AND actual_cost_microusd IS NOT NULL "
+                "THEN actual_cost_microusd ELSE reserved_cost_microusd END), 0) "
                 "FROM budget_ledger WHERE day_utc=?",
                 (day,),
             ).fetchone()
@@ -1984,6 +2390,7 @@ class Store:
             "reserved_cost_microusd": int(row[1] or 0),
             "reported_actual_cost_microusd": int(row[2] or 0),
             "usage_unknown_count": int(row[3] or 0),
+            "admission_cost_microusd": int(row[4] or 0),
         }
 
     def queue_status(self, *, now: datetime | None = None) -> dict:

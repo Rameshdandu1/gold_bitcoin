@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from test_phase3_consensus import analysis_fixture, approvals, eligibility, persist_candidate
@@ -6,6 +7,7 @@ from test_phase3_consensus import analysis_fixture, approvals, eligibility, pers
 from marketintel.api import create_app
 from marketintel.config import Settings
 from marketintel.consensus import decide_v2
+from marketintel.delta import OrderBookAssembler, parse_trade_message
 from marketintel.models import SignalState
 from marketintel.notifications import (
     AlertWorker,
@@ -59,6 +61,36 @@ def committed_alert(store):
     candidate, analysis = analysis_fixture()
     persist_candidate(store, candidate)
     assert store.save_analysis_envelope(analysis)
+    market_at = candidate.observed_at_utc + timedelta(seconds=30)
+    event_micros = int(market_at.timestamp() * 1_000_000)
+    event, _ = parse_trade_message(
+        {
+            "type": "trades",
+            "sy": candidate.symbol,
+            "p": "2600",
+            "s": "1",
+            "r": "t",
+            "t": event_micros,
+            "ts": event_micros + 1,
+        },
+        received_at=market_at,
+    )
+    assert store.append_raw_event(event)
+    for source, state in (
+        ("product_discovery:GOLD", "AVAILABLE"),
+        (f"candle_reconciliation:{candidate.symbol}", "VALID"),
+        ("delta_websocket", "CONNECTED"),
+    ):
+        store.record_source_status(source, state, "TEST_FIXTURE_NOT_LIVE", occurred_at=market_at)
+    book = OrderBookAssembler(candidate.symbol, max_age_seconds=120)
+    book.bids = {Decimal("2599.9"): ("2599.9", "10")}
+    book.asks = {Decimal("2600.1"): ("2600.1", "10")}
+    book.last_sequence = 1
+    book.last_event_time_utc = market_at
+    book.last_received_at_utc = market_at
+    book.valid = True
+    book.reason = "TEST_FIXTURE_NOT_LIVE"
+    store.save_book_checkpoint(book)
     gpt, claude = approvals(analysis)
     decision = decide_v2(
         analysis,
