@@ -621,7 +621,7 @@ class ResearchStore:
         revision_id: str,
         outcome: ResearchOutcome,
         *,
-        evaluation_version: str = "phase6-outcome-v1",
+        evaluation_version: str = "phase6-closeout-outcome-v2",
         persisted_at: datetime | None = None,
     ) -> bool:
         payload = outcome.model_dump_json()
@@ -1006,11 +1006,14 @@ class PaperLedger:
             return False
         if decision.ready_at_utc > recorded_at:
             raise ValueError("Cannot prospectively record a future decision")
-        if decision.state == "APPROVED" and evidence_mode in {
-            "PROSPECTIVE",
-            "SIMULATED_PROSPECTIVE",
-        } and (
-            recorded_at > eligible_entry_after or recorded_at >= candidate.expires_at_utc
+        if (
+            decision.state == "APPROVED"
+            and evidence_mode
+            in {
+                "PROSPECTIVE",
+                "SIMULATED_PROSPECTIVE",
+            }
+            and (recorded_at > eligible_entry_after or recorded_at >= candidate.expires_at_utc)
         ):
             raise ValueError("Prospective decision must be persisted before eligible entry")
         db.execute(

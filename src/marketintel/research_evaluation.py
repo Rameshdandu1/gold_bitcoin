@@ -248,9 +248,7 @@ def evaluate_quotes(
         )
     # Decision readiness is not market evidence. Coverage must remain continuous
     # from the last factual quote through the first eligible entry quote.
-    if (first_at - coverage_previous_at).total_seconds() > (
-        policy.maximum_quote_gap_seconds
-    ):
+    if (first_at - coverage_previous_at).total_seconds() > (policy.maximum_quote_gap_seconds):
         return _outcome(
             candidate,
             decision,

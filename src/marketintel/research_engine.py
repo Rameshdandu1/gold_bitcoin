@@ -378,17 +378,11 @@ class SharedResearchEngine:
                 for key, rows in self.trades.items()
             },
             "candles": {
-                f"{key[0]}\u001f{key[1]}": [
-                    value.model_dump(mode="json") for value in rows
-                ]
+                f"{key[0]}\u001f{key[1]}": [value.model_dump(mode="json") for value in rows]
                 for key, rows in self.candles.items()
             },
-            "books": {
-                key: value.model_dump(mode="json") for key, value in self.books.items()
-            },
-            "book_sequences": {
-                key: list(value) for key, value in self.book_sequences.items()
-            },
+            "books": {key: value.model_dump(mode="json") for key, value in self.books.items()},
+            "book_sequences": {key: list(value) for key, value in self.book_sequences.items()},
             "provider_completions": [
                 value.model_dump(mode="json") for value in self.provider_completions.values()
             ],
@@ -599,11 +593,7 @@ def _decisions(
                 "state": "WAIT",
                 "reason": (
                     "Shared application policy blocked provider-ready entry: "
-                    + (
-                        "TARGET_EXHAUSTED"
-                        if target_exhausted
-                        else ",".join(verdict.failed_codes)
-                    )
+                    + ("TARGET_EXHAUSTED" if target_exhausted else ",".join(verdict.failed_codes))
                 ),
             }
         )

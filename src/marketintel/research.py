@@ -620,14 +620,10 @@ def command_report(args: argparse.Namespace) -> int:
             Path(args.paper_database).resolve(),
             production_path=Path(args.production_database).resolve(),
         )
-        holdout_open = store.holdout_is_open(
-            args.experiment_id, config.canonical_config_hash()
-        )
+        holdout_open = store.holdout_is_open(args.experiment_id, config.canonical_config_hash())
         _write_json(
             output / "paper-summary.json",
-            paper.summary(
-                experiment_id=args.experiment_id, include_protected=holdout_open
-            ),
+            paper.summary(experiment_id=args.experiment_id, include_protected=holdout_open),
         )
         with (output / "paper-transitions.jsonl").open("w", encoding="utf-8") as handle:
             offset = 0

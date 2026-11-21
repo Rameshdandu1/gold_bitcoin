@@ -24,7 +24,7 @@ authentication only over a trusted loopback connection, VPN, or an HTTPS reverse
 | `GET /api/research/experiments/{id}` | partition-projected counts, `NO_HOLDOUT`/`HOLDOUT_PROTECTED`/`HOLDOUT_OPENED`, authoritative manifest/configuration, engine matrix and reports |
 | `GET /api/research/experiments/{id}/engines` | six-engine evaluation/candidate counts for the selected experiment |
 | `GET /api/research/experiments/{id}/opportunities?limit=50&offset=0` | bounded four-arm records; protected/crossing outcomes are withheld until recorded final access |
-| `GET /api/research/paper/transitions?limit=100&offset=0` | append-only paper transitions with explicit evidence modes in the summary; no raw provider payloads |
+| `GET /api/research/paper/transitions?experiment_id={id}&limit=100&offset=0` | experiment/partition-scoped append-only paper transitions; protected rows remain hidden until durable final access; no raw provider payloads |
 | `GET /docs`, `/openapi.json` | authenticated FastAPI schema and documentation |
 
 Candidate responses keep `current_lifecycle_*` separate from historical consensus. Provider cards

@@ -20,16 +20,18 @@ cannot be relabelled as prospective by changing only a manifest assertion. Quote
 a start anchor and every pre/post-entry gap; OHLC evaluation requires contiguous intervals.
 
 The scheduler evaluates every frozen cadence even during input silence. Source transitions are
-applied at their availability time to provider readiness and outcome eligibility. This closes the
-reviewed dirty-symbol/source-loss counterexamples; complete reuse of production admission and
-durable full-workflow checkpoint/resume remain separate open acceptance gates.
+applied at their availability time to provider readiness and outcome eligibility. Production
+consensus and connected research adapt their point-in-time evidence into one clock-injected
+application policy for revision, lifecycle, expiry, source, stop, spread and entry-drift checks.
 
-The connected `paper-workflow` command consumes the stored normalized journal and frozen decisions,
-writes decisions before their latency-adjusted eligible entry, and derives outcomes from later
-quotes/source events. Fixture runs are labelled `SIMULATED_PROSPECTIVE`, never prospective elapsed
-observation. The local-stream worker commits each event and cursor atomically and binds progress to
-source identity, generation and a consumed-prefix SHA-256. Ordinary research reads centrally hide
-holdout/crossing outcomes until `final-holdout` records the frozen access identity.
+The connected `paper-workflow` command consumes the stored normalized journal in indexed 500-event
+batches, writes approved decisions before latency-adjusted eligible entry, and separately persists
+terminal unavailable/no-position decisions at their factual resolution. Run identity binds the
+experiment, configuration, dataset and processing/latency policy. Fixture runs are labelled
+`SIMULATED_PROSPECTIVE`, never prospective elapsed observation. Paper rows retain partition
+provenance; ordinary API, count and export paths hide protected/crossing outcomes until
+`final-holdout` records the frozen access identity. Legacy rows lacking provenance are hidden from
+scoped projections.
 
 ## Phase 5 evidence foundation
 
@@ -45,7 +47,13 @@ Phase 6 persists archived-provider decisions when their evidence becomes availab
 their clocks/provenance and revalidates source state before entry. Quote and OHLC evaluation now
 require complete pre-entry and outcome paths. Ordinary aggregate, detail, API and export reads use
 one holdout projection, with deliberate final access recorded before protected results become
-visible. Complete reuse of production admission/lifecycle policy remains an explicit open gate.
+visible.
+
+`run-workflow` checkpoints manifest/config identities, the committed input offset, next evaluation
+clock, bounded trades/candles/books, source history, provider slots and pending scientific state.
+Fresh-process resumes skip the committed prefix and reject source/configuration drift. Output writes
+are immutable, so a fault before checkpoint advancement safely replays the current batch. The paper
+bridge uses the same retry-safe pattern and reports warmup, partial, unresolved and complete states.
 
 Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
 hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,

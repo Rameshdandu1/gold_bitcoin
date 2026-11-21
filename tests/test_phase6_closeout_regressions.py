@@ -59,18 +59,14 @@ def _rewrite_fixture(manifest_path, transform, *, extra_rows=()) -> DatasetManif
     changed.sort(
         key=lambda row: (row.available_at_utc, row.persistence_sequence, row.observation_id)
     )
-    source.write_text(
-        "".join(row.model_dump_json() + "\n" for row in changed), encoding="utf-8"
-    )
+    source.write_text("".join(row.model_dump_json() + "\n" for row in changed), encoding="utf-8")
     evidence = manifest.files[0].model_copy(
         update={
             "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "record_count": len(changed),
         }
     )
-    updated = manifest.model_copy(
-        update={"files": (evidence,), "content_hash": "0" * 64}
-    )
+    updated = manifest.model_copy(update={"files": (evidence,), "content_hash": "0" * 64})
     updated = updated.model_copy(update={"content_hash": updated.canonical_content_hash()})
     manifest_path.write_text(updated.model_dump_json(indent=2) + "\n", encoding="utf-8")
     return updated
@@ -206,9 +202,7 @@ def test_p6_03_readiness_cannot_erase_anchored_quote_gap(direction: str) -> None
         )
     )
     approved = decision().model_copy(update={"ready_at_utc": NOW + timedelta(seconds=150)})
-    target_bid, target_ask = (
-        ("105", "105.5") if direction == "BULLISH" else ("94", "94.5")
-    )
+    target_bid, target_ask = ("105", "105.5") if direction == "BULLISH" else ("94", "94.5")
     rows = [
         quote("anchor", 0, "99.5", "100").model_copy(update={"available_at_utc": NOW}),
         quote("entry", 150, "99.5", "100").model_copy(
@@ -294,12 +288,8 @@ def test_p6_04_paper_derivation_and_api_preserve_frozen_holdout(tmp_path, capsys
     candidates = {
         (row.opportunity_id, row.revision_id): row for row in scratch.candidates(experiment_id)
     }
-    original_config = ExperimentConfig.model_validate_json(
-        config_path.read_text(encoding="utf-8")
-    )
-    protected_config = original_config.model_copy(
-        update={"holdout_start_utc": FIXTURE_NOW}
-    )
+    original_config = ExperimentConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
+    protected_config = original_config.model_copy(update={"holdout_start_utc": FIXTURE_NOW})
     config_path.write_text(protected_config.model_dump_json(indent=2), encoding="utf-8")
 
     def rebind_provider(row: ReplayObservation) -> ReplayObservation:
@@ -315,9 +305,7 @@ def test_p6_04_paper_derivation_and_api_preserve_frozen_holdout(tmp_path, capsys
         return row.model_copy(update={"payload": payload})
 
     _rewrite_fixture(manifest_path, rebind_provider)
-    research, production, _ = _run_gold_workflow(
-        tmp_path / "protected", manifest_path, config_path
-    )
+    research, production, _ = _run_gold_workflow(tmp_path / "protected", manifest_path, config_path)
     capsys.readouterr()
     paper = tmp_path / "protected" / "paper.sqlite3"
     paper_args = [
@@ -416,9 +404,7 @@ def test_p6_04_paper_derivation_and_api_preserve_frozen_holdout(tmp_path, capsys
         == 0
     )
     capsys.readouterr()
-    exported_transitions = (after_export / "paper-transitions.jsonl").read_text(
-        encoding="utf-8"
-    )
+    exported_transitions = (after_export / "paper-transitions.jsonl").read_text(encoding="utf-8")
     assert exported_transitions.count('"state": "TARGET_BEFORE_STOP"') == 12
 
 
@@ -483,9 +469,10 @@ def test_p6_05_public_paper_workflow_records_terminal_unavailable_arms(
     assert research_main(args) == 0
     repeated = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert repeated["decisions"] == repeated["outcomes"] == 12
-    assert PaperLedger(paper, production_path=production).transitions(
-        experiment_id=experiment_id
-    ) == transitions
+    assert (
+        PaperLedger(paper, production_path=production).transitions(experiment_id=experiment_id)
+        == transitions
+    )
 
 
 def test_p6_05_bounded_partial_resume_matches_uninterrupted_public_workflow(
@@ -532,9 +519,9 @@ def test_p6_05_bounded_partial_resume_matches_uninterrupted_public_workflow(
     resumed_events = PaperLedger(resumed, production_path=production).transitions(
         experiment_id=experiment_id
     )
-    uninterrupted_events = PaperLedger(
-        uninterrupted, production_path=production
-    ).transitions(experiment_id=experiment_id)
+    uninterrupted_events = PaperLedger(uninterrupted, production_path=production).transitions(
+        experiment_id=experiment_id
+    )
     assert resumed_events == uninterrupted_events
 
 
@@ -657,15 +644,10 @@ def test_shared_application_policy_blocks_production_and_connected_research(
         tmp_path / "workflow", manifest_path, config_path
     )
     capsys.readouterr()
-    opportunities = ResearchStore(research, production_path=production).opportunities(
-        experiment_id
-    )
+    opportunities = ResearchStore(research, production_path=production).opportunities(experiment_id)
     assert len(opportunities) == 3
     assert all(
-        arm.state == "WAIT"
-        for row in opportunities
-        for arm in row.arms
-        if arm.arm != "RULES_ONLY"
+        arm.state == "WAIT" for row in opportunities for arm in row.arms if arm.arm != "RULES_ONLY"
     )
 
     production_candidate, analysis = analysis_fixture()

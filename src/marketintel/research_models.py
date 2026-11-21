@@ -188,7 +188,7 @@ class ExperimentConfig(BaseModel):
     holdout_start_utc: datetime | None = None
     embargo_seconds: int = Field(default=0, ge=0)
     code_commit: str = "UNRECORDED"
-    algorithm_version: str = "phase5-shared-engine-v1"
+    algorithm_version: str = "phase6-closeout-shared-v2"
     engine_policy_version: str = "m3a-v2"
     feature_policy_version: str = "phase5-feature-state-v1"
     revision_selection_policy: Literal["LATEST_ELIGIBLE_BEFORE_OUTCOME"] = (

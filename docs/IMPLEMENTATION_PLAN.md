@@ -167,13 +167,13 @@ Detailed instructions: [CODEX_PHASE_6.md](../prompts/CODEX_PHASE_6.md).
   explicit final opening with `HOLDOUT_PROTECTED`/`HOLDOUT_OPENED` operator state.
 - [x] **6F offline verification:** public synthetic Gold/BTC research and connected paper commands,
   backend/frontend checks, evidence-mode displays and native Windows instructions.
-- [ ] **Remaining 6C/6F acceptance:** one shared production-worker/historical application service
-  for every admission/lifecycle/risk step, durable checkpoint/resume of complete derived workflow
-  state, longer bounded-memory soak, and destination Windows recovery evidence.
+- [x] **Phase 6 offline closeout:** shared revision/lifecycle/source/current-risk application policy,
+  durable complete derived-workflow and connected-paper resume, scoped holdout-safe paper provenance,
+  explicit unavailable/expired terminal arms and measured 500-event public-command batching.
 
-These remaining gates do not reopen the demonstrated P5 defects, but they prevent a claim of full
-live-style parity or operational readiness. Licensed market data, genuine contemporaneous provider
-outputs and elapsed forward observation remain unavailable.
+The offline software gates are closed by the Phase 6 closeout regression/public-command bundle.
+Destination Windows recovery, licensed live data, genuine contemporaneous provider outputs and
+elapsed forward observation remain operational or empirical gates, not unfinished software slices.
 
 ## Phase 7 — derivatives/optional execution (separate approval; deferred)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.

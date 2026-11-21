@@ -14,7 +14,7 @@ synthetic Gold/BTC verification streams; it does not establish strategy accuracy
 .\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3
 .\.venv\Scripts\python.exe -m marketintel.research paper-workflow --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research evaluate --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
-.\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
+.\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
 ```
 
 Repeat `run-workflow`, `paper-workflow`, `evaluate` and `report` with the generated BTC manifest/config and
@@ -22,7 +22,10 @@ Repeat `run-workflow`, `paper-workflow`, `evaluate` and `report` with the genera
 remain labelled `SYNTHETIC_FIXTURE`. `paper-workflow` is explicitly
 `SIMULATED_PROSPECTIVE`: it durably records decisions before eligible fixture entry and derives
 outcomes from later normalized quotes. It is not elapsed real-time prospective evidence. Missing
-genuine assessments stay `UNAVAILABLE`. The external local-stream importer is separately bounded
+genuine assessments stay `UNAVAILABLE`. `run-workflow --maximum-events N` and
+`paper-workflow --maximum-events N` persist scoped progress; invoking the same command again resumes
+from the committed offset rather than claiming a 0/0 completion. Their normal paths use 500-event
+batches. The external local-stream importer is separately bounded
 and disabled:
 
 ```powershell
@@ -36,12 +39,12 @@ and disabled:
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-22):** Phase 6 closes the demonstrated P5-01, P5-02, P5-04, P5-05,
-P5-06 and P5-07 defects and the concrete P5-03 source/scheduling counterexamples with worker,
-store and public-command regressions. Full production-worker/shared-service parity and durable
-full-workflow checkpoint/resume remain explicit acceptance limitations. See the
-[independent Phase 5 review](docs/audits/phase-5-independent-review.md) and
-[Phase 6 verification](docs/audits/phase-6-verification.md). Live provider/model
+**Closeout status (2026-11-22):** Phase 6 also closes P6-01 through P6-05 and the three prior
+offline software gates. Production consensus and connected research share the deterministic
+revision/lifecycle/source/spread/drift policy; derived research state and paper progress resume
+durably; public processing is batch-bounded and measured by acceptance tests. See the
+[independent Phase 6 review](docs/audits/phase-6-independent-review.md) and
+[Phase 6 closeout verification](docs/audits/phase-6-closeout-verification.md). Live provider/model
 entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
 prospective observation duration, destination Windows Server recovery, market-data soak and
 empirical strategy performance remain unverified.
