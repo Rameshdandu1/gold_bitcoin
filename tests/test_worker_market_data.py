@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +8,8 @@ import pytest
 from marketintel.config import Settings
 from marketintel.delta import DeltaAPIError, parse_trade_message
 from marketintel.detectors import EngineConfig
-from marketintel.models import Candle
+from marketintel.models import CandidateSignal, Candle, DetectionResult, Instrument, SignalState
+from marketintel.quantitative import QUANT_ENGINE_BY_ID, lifecycle_event
 from marketintel.storage import Store
 from marketintel.worker import main as worker_main
 from marketintel.worker import poll_closed_candles, public_market_stream
@@ -25,6 +27,37 @@ def trade_event(when: datetime, price: str = "100"):
         "ts": event_micros + 1_000,
     }
     return parse_trade_message(message, received_at=when + timedelta(milliseconds=2))[0]
+
+
+def persist_active_btc_candidate(store: Store, now: datetime) -> CandidateSignal:
+    candidate = CandidateSignal(
+        candidate_id="m2-active-btc-fixture-0001",
+        snapshot_id="b" * 64,
+        asset="BTC",
+        symbol="BTCUSD",
+        engine="BTC_FAST",
+        horizon_minutes=30,
+        candle_close_utc=now - timedelta(minutes=1),
+        observed_at_utc=now - timedelta(minutes=1),
+        expires_at_utc=now + timedelta(minutes=29),
+        direction="BULLISH",
+        trigger="TEST_FIXTURE_NOT_LIVE",
+        entry=70000,
+        invalidation=69000,
+        targets=[71000],
+        feature_evidence=["TEST_FIXTURE_NOT_LIVE"],
+        rule_version="m2-v1",
+    )
+    initial = lifecycle_event(
+        candidate_id=candidate.candidate_id,
+        snapshot_id=candidate.snapshot_id,
+        from_state=None,
+        to_state=SignalState.CANDIDATE,
+        occurred_at=candidate.observed_at_utc,
+        reason="TEST_FIXTURE_NOT_LIVE candidate emitted",
+    )
+    assert store.add_candidate_with_lifecycle(candidate, initial)
+    return candidate
 
 
 @pytest.mark.asyncio
@@ -134,6 +167,72 @@ async def test_worker_archives_rest_outage_as_unavailable(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_quant_candidate_invalidates_when_instrument_disappears(tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    store = Store(tmp_path / "market.sqlite3")
+    candidate = persist_active_btc_candidate(store, now)
+
+    async def stop_after_iteration(_delay):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("marketintel.worker.ENGINE_CONFIGS", (QUANT_ENGINE_BY_ID["BTC_FAST"],))
+    monkeypatch.setattr("marketintel.worker.asyncio.sleep", stop_after_iteration)
+    settings = Settings(database_path=tmp_path / "market.sqlite3")
+
+    with pytest.raises(asyncio.CancelledError):
+        await poll_closed_candles(settings, store, {})
+
+    lifecycle = store.candidate_lifecycle(candidate.candidate_id)
+    assert [event.to_state for event in lifecycle] == [
+        SignalState.CANDIDATE,
+        SignalState.INVALIDATED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_quant_candidate_invalidates_during_rest_outage(tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    store = Store(tmp_path / "market.sqlite3")
+    candidate = persist_active_btc_candidate(store, now)
+
+    class FailingREST:
+        def __init__(self, _url):
+            pass
+
+        async def historical_candles(self, *_args, **_kwargs):
+            raise DeltaAPIError("fixture outage")
+
+    async def stop_after_iteration(_delay):
+        raise asyncio.CancelledError
+
+    instrument = Instrument(
+        product_id=27,
+        symbol="BTCUSD",
+        contract_type="perpetual_futures",
+        contract_value=Decimal("0.001"),
+        contract_unit_currency="BTC",
+        tick_size=Decimal("0.5"),
+        underlying_asset="BTC",
+        quoting_asset="USD",
+        settling_asset="USD",
+        notional_type="vanilla",
+    )
+    monkeypatch.setattr("marketintel.worker.DeltaREST", FailingREST)
+    monkeypatch.setattr("marketintel.worker.ENGINE_CONFIGS", (QUANT_ENGINE_BY_ID["BTC_FAST"],))
+    monkeypatch.setattr("marketintel.worker.asyncio.sleep", stop_after_iteration)
+    settings = Settings(database_path=tmp_path / "market.sqlite3")
+
+    with pytest.raises(asyncio.CancelledError):
+        await poll_closed_candles(settings, store, {"BTC": instrument})
+
+    lifecycle = store.candidate_lifecycle(candidate.candidate_id)
+    assert [event.to_state for event in lifecycle] == [
+        SignalState.CANDIDATE,
+        SignalState.INVALIDATED,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_periodic_discovery_keeps_collectors_when_symbols_are_unchanged(monkeypatch):
     discovery_calls = 0
     poller_starts = 0
@@ -147,6 +246,7 @@ async def test_periodic_discovery_keeps_collectors_when_symbols_are_unchanged(mo
         gold_symbol = "XAUTUSD"
         database_path = ":memory:"
         delta_discovery_refresh_seconds = 0
+        delta_book_max_age_seconds = 10
 
     class FakeStore:
         def __init__(self, _path):
@@ -154,6 +254,9 @@ async def test_periodic_discovery_keeps_collectors_when_symbols_are_unchanged(mo
 
         def record_source_status(self, *args):
             self.statuses.append(args)
+
+        def save_book_checkpoint(self, _book):
+            return None
 
     class FakeREST:
         def __init__(self, _url):
@@ -193,3 +296,183 @@ async def test_periodic_discovery_keeps_collectors_when_symbols_are_unchanged(mo
     assert discovery_calls == 3
     assert poller_starts == 1
     assert streamer_starts == 1
+
+
+@pytest.mark.asyncio
+async def test_m2_candidate_persists_without_ai_confirmation_call(tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    open_time = now.replace(second=0, microsecond=0) - timedelta(minutes=10)
+    candle = Candle(
+        symbol="XAUTUSD",
+        resolution="5m",
+        open_time=open_time,
+        open=2600,
+        high=2610,
+        low=2595,
+        close=2605,
+        volume_contracts=100,
+        source="TEST_FIXTURE_NOT_LIVE",
+    )
+    candidate = CandidateSignal(
+        candidate_id="m2-candidate-fixture-0001",
+        snapshot_id="a" * 64,
+        asset="GOLD",
+        symbol="XAUTUSD",
+        engine="GOLD_HOURLY",
+        horizon_minutes=60,
+        candle_close_utc=open_time + timedelta(minutes=5),
+        observed_at_utc=now,
+        expires_at_utc=now + timedelta(minutes=60),
+        direction="BULLISH",
+        trigger="TEST_FIXTURE_NOT_LIVE breakout retest",
+        entry=2605,
+        invalidation=2595,
+        targets=[2615],
+        feature_evidence=["TEST_FIXTURE_NOT_LIVE"],
+        source_quality="FRESH",
+        rule_version="m2-v1",
+    )
+
+    class FakeREST:
+        def __init__(self, _url):
+            pass
+
+        async def historical_candles(self, *_args, **_kwargs):
+            return [candle]
+
+    async def stop_after_iteration(_delay):
+        raise asyncio.CancelledError
+
+    async def ai_must_not_run(*_args, **_kwargs):
+        raise AssertionError("M2 must not call paid AI")
+
+    def fake_detect(*_args, **_kwargs):
+        return DetectionResult(
+            engine="GOLD_HOURLY",
+            state=SignalState.CANDIDATE,
+            observed_at_utc=now,
+            reason="TEST_FIXTURE_NOT_LIVE",
+            candidate=candidate,
+        )
+
+    instrument = Instrument(
+        product_id=131253,
+        symbol="XAUTUSD",
+        contract_type="perpetual_futures",
+        contract_value=Decimal("0.001"),
+        contract_unit_currency="XAUT",
+        tick_size=Decimal("0.01"),
+        underlying_asset="XAUT",
+        quoting_asset="USD",
+        settling_asset="USD",
+        notional_type="vanilla",
+    )
+    monkeypatch.setattr("marketintel.worker.DeltaREST", FakeREST)
+    monkeypatch.setattr("marketintel.worker.ENGINE_CONFIGS", (QUANT_ENGINE_BY_ID["GOLD_HOURLY"],))
+    monkeypatch.setattr("marketintel.worker.detect_signal", fake_detect)
+    monkeypatch.setattr("marketintel.worker.independent_review", ai_must_not_run)
+    monkeypatch.setattr("marketintel.worker.asyncio.sleep", stop_after_iteration)
+    store = Store(tmp_path / "market.sqlite3")
+    settings = Settings(database_path=tmp_path / "market.sqlite3", ai_enabled=True)
+
+    with pytest.raises(asyncio.CancelledError):
+        await poll_closed_candles(settings, store, {"GOLD": instrument})
+
+    assert store.recent_candidates()[0]["candidate"]["candidate_id"] == candidate.candidate_id
+    lifecycle = store.candidate_lifecycle(candidate.candidate_id)
+    assert [event.to_state for event in lifecycle] == [SignalState.CANDIDATE]
+
+
+@pytest.mark.asyncio
+async def test_worker_persists_expiry_once_across_restart_poll(tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    open_time = now.replace(second=0, microsecond=0) - timedelta(minutes=10)
+    candle = Candle(
+        symbol="XAUTUSD",
+        resolution="5m",
+        open_time=open_time,
+        open=2600,
+        high=2602,
+        low=2598,
+        close=2600,
+        volume_contracts=100,
+        source="TEST_FIXTURE_NOT_LIVE",
+    )
+    candidate = CandidateSignal(
+        candidate_id="m2-expired-fixture-0001",
+        snapshot_id="e" * 64,
+        asset="GOLD",
+        symbol="XAUTUSD",
+        engine="GOLD_HOURLY",
+        horizon_minutes=60,
+        candle_close_utc=now - timedelta(hours=2),
+        observed_at_utc=now - timedelta(hours=2),
+        expires_at_utc=now - timedelta(hours=1),
+        direction="BULLISH",
+        trigger="TEST_FIXTURE_NOT_LIVE",
+        entry=2600,
+        invalidation=2590,
+        targets=[2610],
+        feature_evidence=["TEST_FIXTURE_NOT_LIVE"],
+        rule_version="m2-v1",
+    )
+    instrument = Instrument(
+        product_id=131253,
+        symbol="XAUTUSD",
+        contract_type="perpetual_futures",
+        contract_value=Decimal("0.001"),
+        contract_unit_currency="XAUT",
+        tick_size=Decimal("0.01"),
+        underlying_asset="XAUT",
+        quoting_asset="USD",
+        settling_asset="USD",
+        notional_type="vanilla",
+    )
+
+    class FakeREST:
+        def __init__(self, _url):
+            pass
+
+        async def historical_candles(self, *_args, **_kwargs):
+            return [candle]
+
+    def fake_detect(*_args, **_kwargs):
+        return DetectionResult(
+            engine="GOLD_HOURLY",
+            state=SignalState.WAIT,
+            observed_at_utc=now,
+            reason="TEST_FIXTURE_NOT_LIVE missing snapshot",
+        )
+
+    async def stop_after_iteration(_delay):
+        raise asyncio.CancelledError
+
+    async def ai_must_not_run(*_args, **_kwargs):
+        raise AssertionError("M2 must not call paid AI")
+
+    store = Store(tmp_path / "market.sqlite3")
+    store.add_candidate(candidate)
+    store.record_candidate_lifecycle(
+        lifecycle_event(
+            candidate_id=candidate.candidate_id,
+            snapshot_id=candidate.snapshot_id,
+            from_state=None,
+            to_state=SignalState.CANDIDATE,
+            occurred_at=candidate.observed_at_utc,
+            reason="TEST_FIXTURE_NOT_LIVE candidate emitted",
+        )
+    )
+    monkeypatch.setattr("marketintel.worker.DeltaREST", FakeREST)
+    monkeypatch.setattr("marketintel.worker.ENGINE_CONFIGS", (QUANT_ENGINE_BY_ID["GOLD_HOURLY"],))
+    monkeypatch.setattr("marketintel.worker.detect_signal", fake_detect)
+    monkeypatch.setattr("marketintel.worker.independent_review", ai_must_not_run)
+    monkeypatch.setattr("marketintel.worker.asyncio.sleep", stop_after_iteration)
+    settings = Settings(database_path=tmp_path / "market.sqlite3", ai_enabled=True)
+
+    with pytest.raises(asyncio.CancelledError):
+        await poll_closed_candles(settings, store, {"GOLD": instrument})
+
+    assert [event.to_state for event in store.candidate_lifecycle(candidate.candidate_id)] == [
+        SignalState.CANDIDATE,
+        SignalState.EXPIRED,
+    ]

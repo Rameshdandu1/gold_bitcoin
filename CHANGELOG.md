@@ -4,6 +4,39 @@ All notable changes to this project are documented in this file.
 
 The project uses four-part release versions for shipped milestones.
 
+## [0.2.0.0] - 2026-11-21
+
+### Added
+
+- Add six independent Gold/BTC deterministic engines across fast, hourly and session horizons with
+  confirmed structure, liquidity, order-flow, order-book and volatility features.
+- Add independent Gold $10/$20/$30 and BTC percentage/ATR target, stop, invalidation and expiry
+  policies, producing research candidates only.
+- Add immutable feature snapshots, candidate revisions, append-only lifecycle events and read-only
+  API routes for their audit history.
+- Add entitlement-gated CoinGlass BTC OI/funding enrichment and an explicitly unavailable Gold
+  reference-provider boundary.
+
+### Changed
+
+- Require exact 500/5,000 trade windows and point-in-time candle availability for historical
+  replay; reject future event/receive times and late REST observations.
+- Materialize validated order-book checkpoints while keeping the immutable raw event journal as the
+  authoritative replay source.
+- Make active candidates fail safe during stale/corrupt data, missing instruments, REST failures,
+  discovery outages and disabled ingestion.
+
+### Fixed
+
+- Prevent context-bar repeat triggers, post-clock order-book reads, concurrent terminal lifecycle
+  transitions and non-positive target prices.
+- Validate CoinGlass supported-pair response shape and record actual provider receive timestamps.
+
+### Safety
+
+- GPT, Claude, alerts and all order execution remain disabled in the Phase 2 production path. No
+  live accuracy, profitability or provider-availability claim is made.
+
 ## [0.1.0.0] - 2026-11-21
 
 ### Added

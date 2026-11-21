@@ -182,9 +182,14 @@ class DeltaREST:
                         delay = min(float(retry_after), 30.0) if retry_after else 2**attempt
                         await asyncio.sleep(max(delay, 0.1))
                         continue
-                    response.raise_for_status()
+                    if response.status_code >= 400:
+                        raise DeltaAPIError(
+                            f"Delta {path} rejected the request ({response.status_code})"
+                        )
                     payload = response.json()
-                except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
+                except DeltaAPIError:
+                    raise
+                except (httpx.RequestError, ValueError) as exc:
                     if attempt >= self.retries:
                         raise DeltaAPIError(f"Delta request failed for {path}") from exc
                     await asyncio.sleep(2**attempt)
@@ -245,6 +250,7 @@ class DeltaREST:
                 "end": int(end.timestamp()),
             },
         )
+        response_received_at = datetime.now(UTC)
         if not isinstance(result, list):
             raise DeltaAPIError("Unexpected historical candle schema")
         candles: list[Candle] = []
@@ -265,6 +271,7 @@ class DeltaREST:
                         low=float(raw["low"]),
                         close=float(raw["close"]),
                         volume_contracts=float(raw.get("volume", 0)),
+                        available_at_utc=response_received_at,
                     )
                 )
             except (KeyError, TypeError, ValueError, ValidationError) as exc:
@@ -385,6 +392,7 @@ class OrderBookAssembler:
         self.bids: dict[Decimal, tuple[str, str]] = {}
         self.last_sequence: int | None = None
         self.last_event_time_utc: datetime | None = None
+        self.last_received_at_utc: datetime | None = None
         self.valid = False
         self.reason = "snapshot_required"
 
@@ -394,6 +402,10 @@ class OrderBookAssembler:
         self.asks.clear()
         self.bids.clear()
         return False
+
+    def invalidate(self, reason: str) -> None:
+        """Require a new snapshot after a connection/session continuity break."""
+        self._invalidate(reason)
 
     @staticmethod
     def _replace_levels(
@@ -422,6 +434,7 @@ class OrderBookAssembler:
         return zlib.crc32(f"{ask_text}|{bid_text}".encode()) & 0xFFFFFFFF
 
     def apply(self, event: RawMarketEvent) -> bool:
+        self.last_received_at_utc = event.received_at_utc
         if event.channel != "ob_updates" or event.symbol != self.symbol:
             return self._invalidate("wrong_channel_or_symbol")
         payload = event.payload
@@ -469,6 +482,10 @@ class OrderBookAssembler:
         _aware(now, "now")
         if self.last_event_time_utc is None:
             return self._invalidate("missing_event_time"), self.reason
+        if self.last_received_at_utc is None:
+            return False, "missing_receive_time"
+        if self.last_received_at_utc > now:
+            return False, "received_after_evaluation_clock"
         age = (now - self.last_event_time_utc).total_seconds()
         if age > self.max_age_seconds:
             return False, "stale_book"
@@ -521,6 +538,10 @@ class DeltaPublicStream:
     def mark_stale(self, detail: str) -> None:
         """Expose a monitor-detected idle feed through the same transition channel."""
         self._notify_connection_status("STALE", detail)
+
+    def invalidate_books(self, reason: str) -> None:
+        for book in self.books.values():
+            book.invalidate(reason)
 
     def subscription_message(self) -> dict[str, Any]:
         return {
@@ -600,6 +621,7 @@ class DeltaPublicStream:
         backoff = 1.0
         while True:
             disconnect_detail = "stream_ended"
+            self.invalidate_books("fresh_snapshot_required_after_connect")
             self._notify_connection_status("CONNECTING", "Opening Delta public WebSocket")
             try:
                 async with websockets.connect(
@@ -630,6 +652,8 @@ class DeltaPublicStream:
                         if self.books and all(book.valid for book in self.books.values()):
                             backoff = 1.0
             except asyncio.CancelledError:
+                self.invalidate_books("connection_cancelled")
+                self._notify_connection_status("DISCONNECTED", "CancelledError")
                 raise
             except (
                 OSError,
@@ -642,6 +666,7 @@ class DeltaPublicStream:
                 if status_code == 429:
                     backoff = max(backoff, 300.0)
                 LOGGER.warning("Delta public stream disconnected: %s", type(exc).__name__)
+            self.invalidate_books("fresh_snapshot_required_after_disconnect")
             self._notify_connection_status("DISCONNECTED", disconnect_detail)
             jitter = random.uniform(0, min(backoff * 0.2, 5.0))
             await asyncio.sleep(backoff + jitter)

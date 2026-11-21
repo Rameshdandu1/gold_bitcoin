@@ -1,8 +1,8 @@
 # CODEX_PHASE_2.md — Next Codex instructions: six independent signal engines
 
-Repository: https://github.com/Rameshdandu1/gold_bitcoin  
-Owner: Rameshdandu1  
-Prior work: PR #1, `feature/delta-market-data-integrity`  
+Repository: https://github.com/Rameshdandu1/gold_bitcoin
+Owner: Rameshdandu1
+Prior work: PR #1, `feature/delta-market-data-integrity`
 Next milestone: Phase 2 / M2 — Deterministic Gold and Bitcoin opportunity detection.
 
 ## Copy/paste into Codex
@@ -45,8 +45,8 @@ You are the principal engineer for the Gold + Bitcoin Dual-AI Market Intelligenc
 Do **not** treat Delta XAUT/PAXG as identical to XAU/USD. If XAU reference prices are not licensed/available, report missing reference and prevent any basis-dependent claim, while allowing only explicitly approved token-market-only features.
 
 ### 3. Bitcoin engines — same horizons, independent parameterization
-**BTC_FAST (15–30m):** short-window trade aggression, 1m/3m sweep-reclaim, 5m structure, volume/range expansion and book integrity.  
-**BTC_HOURLY (60m):** 5m/15m structure, breakout/retest, VWAP, CVD, funding/OI only if available and fresh.  
+**BTC_FAST (15–30m):** short-window trade aggression, 1m/3m sweep-reclaim, 5m structure, volume/range expansion and book integrity.
+**BTC_HOURLY (60m):** 5m/15m structure, breakout/retest, VWAP, CVD, funding/OI only if available and fresh.
 **BTC_SESSION (120–240m):** 15m/1h/4h structure, session levels, sustained order flow, derivatives positioning and macro if verified.
 
 Do not reuse Gold $10/$20/$30 targets for BTC; use ATR- and percentage-scaled target tiers as **configurable, provisional heuristics**, not empirical probabilities. Allow each engine to output a different direction. Show `WAIT` for insufficient movement budget.

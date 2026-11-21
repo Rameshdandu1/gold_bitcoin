@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from marketintel.delta import DeltaDataIntegrityError, OrderBookAssembler, parse_trade_message
-from marketintel.models import Candle, RawMarketEvent
+from marketintel.models import Candle, RawMarketEvent, TradeRecord
 
 RESOLUTION_SECONDS = {
     "1m": 60,
@@ -77,7 +77,12 @@ def aggregate_trade_candles(
         raise ValueError(f"Unsupported resolution: {resolution}")
     unique: dict[str, RawMarketEvent] = {}
     for event in events:
-        if event.channel == "trades" and event.symbol == symbol:
+        if (
+            event.channel == "trades"
+            and event.symbol == symbol
+            and event.event_time_utc <= through
+            and event.received_at_utc <= through
+        ):
             unique[event.event_id] = event
     ordered = sorted(
         unique.values(),
@@ -88,23 +93,21 @@ def aggregate_trade_candles(
             event.event_id,
         ),
     )
-    buckets: dict[datetime, list[tuple[Decimal, Decimal]]] = {}
+    buckets: dict[datetime, list[tuple[Decimal, Decimal, datetime]]] = {}
     for event in ordered:
-        if event.event_time_utc > through:
-            continue
         _, trade = parse_trade_message(event.payload, received_at=event.received_at_utc)
         epoch = int(trade.event_time_utc.timestamp())
         bucket_epoch = epoch - (epoch % seconds)
         bucket = datetime.fromtimestamp(bucket_epoch, tz=UTC)
-        buckets.setdefault(bucket, []).append((trade.price, trade.contracts))
+        buckets.setdefault(bucket, []).append((trade.price, trade.contracts, trade.received_at_utc))
 
     candles: list[Candle] = []
     for open_time in sorted(buckets):
         if open_time + timedelta(seconds=seconds) > through.astimezone(UTC):
             continue
         rows = buckets[open_time]
-        prices = [price for price, _ in rows]
-        volume = sum((contracts for _, contracts in rows), Decimal("0"))
+        prices = [price for price, _, _ in rows]
+        volume = sum((contracts for _, contracts, _ in rows), Decimal("0"))
         candles.append(
             Candle(
                 symbol=symbol,
@@ -116,9 +119,38 @@ def aggregate_trade_candles(
                 close=float(prices[-1]),
                 volume_contracts=float(volume),
                 source="delta_india_trade_replay",
+                available_at_utc=max(received_at for _, _, received_at in rows),
             )
         )
     return candles
+
+
+def replay_trade_records(
+    events: Iterable[RawMarketEvent], *, symbol: str, through: datetime
+) -> list[TradeRecord]:
+    """Rebuild the exact de-duplicated executed-trade stream available at ``through``."""
+    _require_aware(through, "through")
+    unique = {
+        event.event_id: event
+        for event in events
+        if event.channel == "trades"
+        and event.symbol == symbol
+        and event.event_time_utc <= through
+        and event.received_at_utc <= through
+    }
+    records: list[TradeRecord] = []
+    for event in sorted(
+        unique.values(),
+        key=lambda item: (
+            item.event_time_utc,
+            item.publish_time_utc or item.event_time_utc,
+            item.received_at_utc,
+            item.event_id,
+        ),
+    ):
+        _, trade = parse_trade_message(event.payload, received_at=event.received_at_utc)
+        records.append(trade)
+    return records
 
 
 def reconcile_candles(
@@ -154,12 +186,27 @@ def reconcile_candles(
 
 
 def replay_order_book(
-    events: Iterable[RawMarketEvent], *, symbol: str, max_age_seconds: float = 10.0
+    events: Iterable[RawMarketEvent],
+    *,
+    symbol: str,
+    max_age_seconds: float = 10.0,
+    through: datetime | None = None,
 ) -> OrderBookAssembler:
     """Rebuild the book in deterministic event/sequence order for diagnostics."""
+    if through is not None:
+        _require_aware(through, "through")
     book = OrderBookAssembler(symbol, max_age_seconds=max_age_seconds)
     ordered = sorted(
-        (event for event in events if event.channel == "ob_updates" and event.symbol == symbol),
+        (
+            event
+            for event in events
+            if event.channel == "ob_updates"
+            and event.symbol == symbol
+            and (
+                through is None
+                or (event.event_time_utc <= through and event.received_at_utc <= through)
+            )
+        ),
         key=lambda event: (
             event.received_at_utc,
             event.sequence if event.sequence is not None else -1,

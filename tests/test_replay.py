@@ -11,6 +11,7 @@ from marketintel.replay import (
     finalized_candles,
     reconcile_candles,
     replay_order_book,
+    replay_trade_records,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "delta"
@@ -74,6 +75,29 @@ def test_trade_replay_deduplicates_event_id():
         through=start + timedelta(minutes=1),
     )
     assert candles[0].volume_contracts == 2
+
+
+def test_trade_record_replay_is_deterministic_and_preserves_unknown_aggressor():
+    start = datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
+    buy = trade("BTCUSD", start + timedelta(seconds=5), 100, 2)
+    unknown = trade("BTCUSD", start + timedelta(seconds=6), 101, 3, "unknown")
+    first = replay_trade_records(
+        [unknown, buy, buy], symbol="BTCUSD", through=start + timedelta(seconds=10)
+    )
+    second = replay_trade_records(
+        [buy, unknown], symbol="BTCUSD", through=start + timedelta(seconds=10)
+    )
+    assert first == second
+    assert [row.aggressor for row in first] == ["BUY", None]
+
+
+def test_late_received_trade_does_not_leak_into_earlier_replay():
+    event_time = datetime(2026, 11, 21, 12, 0, 5, tzinfo=UTC)
+    event = trade("BTCUSD", event_time, 100, 2)
+    late = event.model_copy(update={"received_at_utc": event_time + timedelta(minutes=2)})
+    through = event_time + timedelta(minutes=1)
+    assert replay_trade_records([late], symbol="BTCUSD", through=through) == []
+    assert aggregate_trade_candles([late], symbol="BTCUSD", through=through) == []
 
 
 def test_equal_exchange_timestamps_use_publish_order_for_open_close():

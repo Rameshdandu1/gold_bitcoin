@@ -253,6 +253,35 @@ def test_valid_book_expires_when_feed_goes_quiet():
     assert book.apply(parse_book_message(update, received_at=received_after(update))) is True
 
 
+def test_book_received_after_evaluation_clock_is_not_available_yet():
+    message = load_fixture("websocket.json")["book_snapshot"]
+    received_at = received_after(message)
+    book = OrderBookAssembler("BTCUSD", max_age_seconds=10)
+    assert book.apply(parse_book_message(message, received_at=received_at)) is True
+
+    evaluation_clock = received_at - timedelta(microseconds=1)
+    assert book.quality(now=evaluation_clock) == (
+        False,
+        "received_after_evaluation_clock",
+    )
+    assert book.top_of_book(now=evaluation_clock) is None
+
+
+def test_connection_generation_invalidates_all_books_until_fresh_snapshot():
+    message = load_fixture("websocket.json")["book_snapshot"]
+    stream = DeltaPublicStream("wss://example.invalid", ["BTCUSD"])
+    received_at = received_after(message)
+    stream.ingest_message(message, received_at=received_at)
+    assert stream.book_quality("BTCUSD", now=received_at)[0] is True
+
+    stream.invalidate_books("fresh_snapshot_required_after_disconnect")
+    assert stream.book_quality("BTCUSD") == (
+        False,
+        "fresh_snapshot_required_after_disconnect",
+    )
+    assert stream.books["BTCUSD"].top_of_book() is None
+
+
 def test_missing_book_sequence_rejected():
     message = deepcopy(load_fixture("websocket.json")["book_snapshot"])
     del message["seq"]
@@ -377,6 +406,126 @@ async def test_rest_partial_outage_fails_after_bounded_retries(monkeypatch):
         with pytest.raises(DeltaAPIError, match="bounded retries"):
             await rest.products()
     assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_rest_non_retryable_4xx_fails_once_and_malformed_envelope_fails_closed():
+    calls = 0
+
+    def rejected(_request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, json={"success": False, "error": "fixture"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(rejected)) as client:
+        rest = DeltaREST("https://example.invalid", retries=3, client=client)
+        with pytest.raises(DeltaAPIError, match="rejected"):
+            await rest.products()
+    assert calls == 1
+
+    def malformed(_request):
+        return httpx.Response(200, json=["not", "an", "envelope"])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(malformed)) as client:
+        rest = DeltaREST("https://example.invalid", client=client)
+        with pytest.raises(DeltaAPIError, match="Unsuccessful"):
+            await rest.products()
+
+
+@pytest.mark.asyncio
+async def test_stream_recovers_from_corrupt_json_and_ignores_unknown_frames(monkeypatch):
+    trade = deepcopy(load_fixture("websocket.json")["trades"][0])
+    event_micros = int(datetime.now(UTC).timestamp() * 1_000_000)
+    trade["t"] = event_micros
+    trade["ts"] = event_micros + 1_000
+    connection_count = 0
+
+    class FakeSocket:
+        def __init__(self, messages):
+            self.messages = messages
+
+        async def send(self, _payload):
+            return None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.messages:
+                return self.messages.pop(0)
+            raise StopAsyncIteration
+
+    class FakeConnection:
+        async def __aenter__(self):
+            nonlocal connection_count
+            connection_count += 1
+            if connection_count == 1:
+                return FakeSocket(["{corrupt-json"])
+            return FakeSocket([json.dumps({"type": "heartbeat"}), json.dumps(trade)])
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr("marketintel.delta.websockets.connect", lambda *_a, **_k: FakeConnection())
+    monkeypatch.setattr("marketintel.delta.asyncio.sleep", no_sleep)
+    stream = DeltaPublicStream("wss://example.invalid", ["BTCUSD"])
+    iterator = stream.messages()
+    event = await anext(iterator)
+    await iterator.aclose()
+    assert event.channel == "trades"
+    assert connection_count == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_429_uses_extended_cooldown(monkeypatch):
+    trade = deepcopy(load_fixture("websocket.json")["trades"][0])
+    event_micros = int(datetime.now(UTC).timestamp() * 1_000_000)
+    trade["t"] = event_micros
+    trade["ts"] = event_micros + 1_000
+    sleeps = []
+    connection_count = 0
+
+    class RateLimited(OSError):
+        response = type("Response", (), {"status_code": 429})()
+
+    class FakeSocket:
+        async def send(self, _payload):
+            return None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if getattr(self, "done", False):
+                raise StopAsyncIteration
+            self.done = True
+            return json.dumps(trade)
+
+    class FakeConnection:
+        async def __aenter__(self):
+            nonlocal connection_count
+            connection_count += 1
+            if connection_count == 1:
+                raise RateLimited("fixture 429")
+            return FakeSocket()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("marketintel.delta.websockets.connect", lambda *_a, **_k: FakeConnection())
+    monkeypatch.setattr("marketintel.delta.asyncio.sleep", record_sleep)
+    monkeypatch.setattr("marketintel.delta.random.uniform", lambda *_args: 0)
+    stream = DeltaPublicStream("wss://example.invalid", ["BTCUSD"])
+    iterator = stream.messages()
+    await anext(iterator)
+    await iterator.aclose()
+    assert sleeps[0] == 300
 
 
 @pytest.mark.asyncio

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     coinglass_enabled: bool = False
     coinglass_api_key: str = ""
     coinglass_base_url: str = "https://open-api-v4.coinglass.com"
+    coinglass_plan: str = Field(
+        default="HOBBYIST", pattern="^(HOBBYIST|STARTUP|STANDARD|PROFESSIONAL|ENTERPRISE)$"
+    )
 
     @model_validator(mode="after")
     def block_execution(self) -> "Settings":
