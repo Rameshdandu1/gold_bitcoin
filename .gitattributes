@@ -1,0 +1,3 @@
+# Research evidence hashes cover exact bytes. Keep tracked JSON Lines evidence
+# stable when Git checks out the repository on Windows.
+*.jsonl text eol=lf
