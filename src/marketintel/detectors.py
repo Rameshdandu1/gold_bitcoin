@@ -4,10 +4,10 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from marketintel.indicators import average_true_range, prior_range
-from marketintel.models import Candle, Candidate, EngineDescriptor
+from marketintel.models import Candidate, Candle, EngineDescriptor
 
 BAR_MINUTES = {"1m": 1, "5m": 5, "15m": 15}
 
@@ -58,7 +58,7 @@ def create_candidate(
     now: datetime | None = None,
 ) -> Candidate | None:
     """Only accepts candles that are closed at `now` and contiguous at base resolution."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if not candles or now.tzinfo is None:
         return None
     bar_minutes = BAR_MINUTES[engine.resolution]
@@ -68,7 +68,7 @@ def create_candidate(
     if len({c.symbol for c in ordered}) != 1 or len(ordered) < engine.breakout_lookback + 1:
         return None
     # Must be contiguous; all timestamps must represent candle OPEN time.
-    for prev, nxt in zip(ordered, ordered[1:]):
+    for prev, nxt in zip(ordered, ordered[1:], strict=False):
         if nxt.open_time - prev.open_time != timedelta(minutes=bar_minutes):
             return None
     latest = ordered[-1]
@@ -90,18 +90,25 @@ def create_candidate(
     risk = max(atr * engine.stop_atr_multiplier, entry * 0.00001)
     max_move = atr * math.sqrt(engine.horizon_minutes / bar_minutes)
     max_move *= engine.volatility_budget_multiplier
-    distances = ([10.0, 20.0, 30.0] if engine.asset == "GOLD" else [
-        entry * fraction for fraction in [0.0025, 0.005, 0.0075]
-    ])
+    distances = (
+        [10.0, 20.0, 30.0]
+        if engine.asset == "GOLD"
+        else [entry * fraction for fraction in [0.0025, 0.005, 0.0075]]
+    )
     feasible = [d for d in distances if d <= max_move and d / risk >= 1.5]
     if not feasible:
         return None
     invalidation = entry - risk if direction == "BULLISH" else entry + risk
     targets = [entry + d if direction == "BULLISH" else entry - d for d in feasible]
-    candidate_key = "|".join([
-        ordered[-1].symbol, engine.engine_id, candle_close.isoformat(), direction,
-        "breakout-v0.1",
-    ])
+    candidate_key = "|".join(
+        [
+            ordered[-1].symbol,
+            engine.engine_id,
+            candle_close.isoformat(),
+            direction,
+            "breakout-v0.1",
+        ]
+    )
     candidate_id = hashlib.sha256(candidate_key.encode()).hexdigest()[:24]
     # Hash ONLY facts and rule constants, never an LLM-generated field.
     features = {

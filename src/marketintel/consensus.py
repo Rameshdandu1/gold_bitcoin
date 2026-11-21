@@ -1,6 +1,6 @@
 """Fail-closed decision gate; does NOT authorize trading or place orders."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from marketintel.models import AnalystAssessment, Candidate, ConsensusResult, Status
 
@@ -14,7 +14,7 @@ def decide(
     max_age_seconds: int = 180,
     min_reward_risk: float = 1.5,
 ) -> ConsensusResult:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     def result(status: Status, reason: str, indices: list[int] | None = None) -> ConsensusResult:
         return ConsensusResult(
@@ -48,7 +48,8 @@ def decide(
     overlap = set(gpt.supported_target_indices) & set(claude.supported_target_indices)
     risk = abs(candidate.entry - candidate.invalidation)
     accepted = sorted(
-        i for i in overlap
+        i
+        for i in overlap
         if 1 <= i <= len(candidate.targets)
         and abs(candidate.targets[i - 1] - candidate.entry) / risk >= min_reward_risk
     )

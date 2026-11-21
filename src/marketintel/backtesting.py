@@ -1,9 +1,9 @@
 """Conservative target-before-stop event labelling on future closed OHLC bars."""
 
+from collections.abc import Sequence
 from enum import StrEnum
-from typing import Sequence
 
-from marketintel.models import Candle, Candidate
+from marketintel.models import Candidate, Candle
 
 
 class Outcome(StrEnum):
@@ -52,6 +52,7 @@ def evaluate_target_before_stop(
         if period is None:
             raise ValueError("Unknown bar resolution")
         from datetime import timedelta
+
         most_recent_end = bar.open_time + timedelta(minutes=period)
     if not examined:
         return Outcome.INCOMPLETE
