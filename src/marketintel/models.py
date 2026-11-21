@@ -26,6 +26,34 @@ class Status(StrEnum):
     WAIT = "WAIT"
 
 
+class SignalState(StrEnum):
+    """M2 research-signal states. CONFIRMED is intentionally impossible here."""
+
+    UNAVAILABLE = "UNAVAILABLE"
+    WAIT = "WAIT"
+    WATCH = "WATCH"
+    CANDIDATE = "CANDIDATE"
+    REJECTED = "REJECTED"
+    INVALIDATED = "INVALIDATED"
+    EXPIRED = "EXPIRED"
+
+
+class MarketRegime(StrEnum):
+    TRENDING = "TRENDING"
+    RANGING = "RANGING"
+    VOLATILE = "VOLATILE"
+    UNKNOWN = "UNKNOWN"
+
+
+class StructureKind(StrEnum):
+    HH = "HH"
+    HL = "HL"
+    LH = "LH"
+    LL = "LL"
+    BOS = "BOS"
+    CHOCH = "CHOCH"
+
+
 class DeltaAsset(BaseModel):
     """Minimal asset metadata required to interpret a Delta contract."""
 
@@ -165,6 +193,189 @@ class TradeWindow(BaseModel):
     elapsed_seconds: Decimal = Decimal("0")
 
 
+class LiquidityLevel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["1"] = "1"
+    kind: Literal[
+        "SWING_HIGH",
+        "SWING_LOW",
+        "SESSION_HIGH",
+        "SESSION_LOW",
+        "PREVIOUS_DAY_HIGH",
+        "PREVIOUS_DAY_LOW",
+    ]
+    price: Decimal = Field(gt=0)
+    observed_at_utc: datetime
+    source: str
+    touches: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def timestamp_is_aware(self) -> "LiquidityLevel":
+        if self.observed_at_utc.tzinfo is None or self.observed_at_utc.utcoffset() is None:
+            raise ValueError("Liquidity level timestamp must be timezone aware")
+        return self
+
+
+class FlowWindow(BaseModel):
+    """Normalized executed-trade flow for an exact count or event-time window."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    requested_trade_count: int | None = Field(default=None, gt=0)
+    window_seconds: int | None = Field(default=None, gt=0)
+    trade_count: int = Field(ge=0)
+    classified_trade_count: int = Field(ge=0)
+    unclassified_trade_count: int = Field(ge=0)
+    elapsed_seconds: Decimal = Field(default=Decimal("0"), ge=0)
+    trades_per_second: Decimal = Field(default=Decimal("0"), ge=0)
+    latest_event_time_utc: datetime | None = None
+    latest_received_at_utc: datetime | None = None
+    buy_contracts: Decimal = Field(default=Decimal("0"), ge=0)
+    sell_contracts: Decimal = Field(default=Decimal("0"), ge=0)
+    unclassified_contracts: Decimal = Field(default=Decimal("0"), ge=0)
+    cvd_contracts: Decimal = Decimal("0")
+    cvd_base_units: Decimal = Decimal("0")
+    cvd_quote_notional: Decimal = Decimal("0")
+
+    @model_validator(mode="after")
+    def timestamps_are_aware(self) -> "FlowWindow":
+        values = [self.latest_event_time_utc, self.latest_received_at_utc]
+        if any(
+            value is not None and (value.tzinfo is None or value.utcoffset() is None)
+            for value in values
+        ):
+            raise ValueError("Flow timestamps must be timezone aware")
+        return self
+
+
+class OrderFlowFeatures(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    last_500: FlowWindow
+    last_5000: FlowWindow
+    last_5m: FlowWindow
+    last_15m: FlowWindow
+
+
+class BookFeatures(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    available: bool
+    observed_at_utc: datetime | None = None
+    best_bid: Decimal | None = Field(default=None, gt=0)
+    best_ask: Decimal | None = Field(default=None, gt=0)
+    spread: Decimal | None = Field(default=None, ge=0)
+    bid_depth_quote: Decimal = Field(default=Decimal("0"), ge=0)
+    ask_depth_quote: Decimal = Field(default=Decimal("0"), ge=0)
+    imbalance: Decimal | None = Field(default=None, ge=-1, le=1)
+    absorption: Literal["BUY", "SELL", "NONE", "UNKNOWN"] = "UNKNOWN"
+    reason: str = ""
+
+
+class VolatilityBudget(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    atr: Decimal = Field(ge=0)
+    projected_move: Decimal = Field(ge=0)
+    relative_volume: Decimal | None = Field(default=None, ge=0)
+    range_expansion: Decimal | None = Field(default=None, ge=0)
+    method: str = "ATR horizon scaling; provisional, not a probability"
+
+
+class StructureEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: StructureKind
+    direction: Direction
+    resolution: str = Field(min_length=1)
+    level: Decimal = Field(gt=0)
+    pivot_time_utc: datetime
+    confirmed_at_utc: datetime
+    explanation: str
+
+    @model_validator(mode="after")
+    def timestamps_are_aware_and_ordered(self) -> "StructureEvent":
+        for value in (self.pivot_time_utc, self.confirmed_at_utc):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("Structure timestamps must be timezone aware")
+        if self.confirmed_at_utc < self.pivot_time_utc:
+            raise ValueError("Structure confirmation cannot precede its pivot")
+        return self
+
+
+class ExternalMetric(BaseModel):
+    """Source-attributed optional enrichment; never synthesized when unavailable."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    metric: str
+    symbol: str
+    value: Decimal
+    unit: str
+    observed_at_utc: datetime
+    received_at_utc: datetime | None = None
+    timestamp_basis: Literal["PROVIDER_EVENT", "INTERVAL_CLOSE", "RECEIVED_AT"]
+    entitlement: str
+    source_scope: str
+
+    @model_validator(mode="after")
+    def timestamp_is_aware(self) -> "ExternalMetric":
+        timestamps = [self.observed_at_utc]
+        if self.received_at_utc is not None:
+            timestamps.append(self.received_at_utc)
+        if any(value.tzinfo is None or value.utcoffset() is None for value in timestamps):
+            raise ValueError("External metric timestamps must be timezone aware")
+        if self.received_at_utc is not None and self.received_at_utc < self.observed_at_utc:
+            raise ValueError("External metric receive time cannot precede observation time")
+        return self
+
+
+class FeatureSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["1"] = "1"
+    snapshot_id: str = Field(min_length=32)
+    asset: Literal["GOLD", "BTC"]
+    symbol: str
+    venue: Literal["delta_india"] = "delta_india"
+    engine: str
+    horizon_minutes: Literal[30, 60, 240]
+    candle_close_utc: datetime
+    observed_at_utc: datetime
+    regime: MarketRegime
+    structures: tuple[StructureEvent, ...] = ()
+    liquidity_levels: tuple[LiquidityLevel, ...] = ()
+    order_flow: OrderFlowFeatures
+    book: BookFeatures
+    volatility: VolatilityBudget
+    vwap: Decimal | None = Field(default=None, gt=0)
+    source_quality: Literal["FRESH", "STALE", "INCOMPLETE"]
+    warnings: tuple[str, ...] = ()
+    external_metrics: tuple[ExternalMetric, ...] = ()
+
+
+class CandidateLifecycleEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["1"] = "1"
+    event_id: str = Field(min_length=16)
+    candidate_id: str = Field(min_length=16)
+    snapshot_id: str = Field(min_length=16)
+    from_state: SignalState | None = None
+    to_state: SignalState
+    occurred_at_utc: datetime
+    reason: str
+
+    @model_validator(mode="after")
+    def lifecycle_timestamp_is_aware(self) -> "CandidateLifecycleEvent":
+        if self.occurred_at_utc.tzinfo is None or self.occurred_at_utc.utcoffset() is None:
+            raise ValueError("Lifecycle timestamp must be timezone aware")
+        return self
+
+
 class Candle(BaseModel):
     symbol: str
     resolution: str
@@ -175,11 +386,16 @@ class Candle(BaseModel):
     close: float = Field(gt=0)
     volume_contracts: float = Field(default=0, ge=0)
     source: str = "delta_india"
+    available_at_utc: datetime | None = None
 
     @model_validator(mode="after")
     def valid_range(self) -> "Candle":
         if self.open_time.tzinfo is None or self.open_time.utcoffset() is None:
             raise ValueError("Candle timestamp must be timezone aware")
+        if self.available_at_utc is not None and (
+            self.available_at_utc.tzinfo is None or self.available_at_utc.utcoffset() is None
+        ):
+            raise ValueError("Candle availability timestamp must be timezone aware")
         if self.high < max(self.open, self.close, self.low):
             raise ValueError("high must be >= open/close/low")
         if self.low > min(self.open, self.close, self.high):
@@ -187,28 +403,37 @@ class Candle(BaseModel):
         return self
 
 
-class Candidate(BaseModel):
+class CandidateSignal(BaseModel):
+    """Canonical immutable M2 research candidate; never an order or AI confirmation."""
+
+    model_config = ConfigDict(frozen=True)
+
     schema_version: Literal["1"] = "1"
     candidate_id: str
     snapshot_id: str
     asset: Literal["GOLD", "BTC"]
     symbol: str
     venue: Literal["delta_india"] = "delta_india"
+    engine: str = "LEGACY_BREAKOUT"
     horizon_minutes: Literal[30, 60, 240]
     candle_close_utc: datetime
     observed_at_utc: datetime
     expires_at_utc: datetime
     direction: Literal["BULLISH", "BEARISH"]
+    state: SignalState = SignalState.CANDIDATE
     trigger: str
     entry: float = Field(gt=0)
     invalidation: float = Field(gt=0)
     targets: list[float] = Field(min_length=1)
     feature_evidence: list[str]
+    counter_evidence: list[str] = Field(default_factory=list)
+    explanation: str = "Deterministic research candidate; NOT AI CONFIRMED"
     source_quality: Literal["FRESH", "STALE", "INCOMPLETE"] = "FRESH"
     rule_version: str = "breakout-v0.1"
+    not_ai_confirmed: Literal[True] = True
 
     @model_validator(mode="after")
-    def validate_prices(self) -> "Candidate":
+    def validate_prices(self) -> "CandidateSignal":
         if any(
             d.tzinfo is None or d.utcoffset() is None
             for d in [self.candle_close_utc, self.observed_at_utc, self.expires_at_utc]
@@ -216,11 +441,37 @@ class Candidate(BaseModel):
             raise ValueError("Candidate timestamps must be timezone aware")
         if self.expires_at_utc <= self.candle_close_utc:
             raise ValueError("Candidate expiry must be after the candle close")
+        if any(target <= 0 for target in self.targets):
+            raise ValueError("Candidate targets must be positive")
         if self.direction == "BULLISH":
             if not self.invalidation < self.entry or any(t <= self.entry for t in self.targets):
                 raise ValueError("Invalid bullish stop or target")
         elif not self.invalidation > self.entry or any(t >= self.entry for t in self.targets):
             raise ValueError("Invalid bearish stop or target")
+        if self.state is not SignalState.CANDIDATE:
+            raise ValueError("CandidateSignal must be in CANDIDATE state")
+        return self
+
+
+# Compatibility name used by M0/M1 AI, storage and backtest modules. There is one canonical model,
+# not a divergent legacy candidate contract.
+Candidate = CandidateSignal
+
+
+class DetectionResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    engine: str
+    state: SignalState
+    observed_at_utc: datetime
+    reason: str
+    snapshot: FeatureSnapshot | None = None
+    candidate: CandidateSignal | None = None
+
+    @model_validator(mode="after")
+    def state_matches_candidate(self) -> "DetectionResult":
+        if (self.state is SignalState.CANDIDATE) != (self.candidate is not None):
+            raise ValueError("Only CANDIDATE results may contain a candidate")
         return self
 
 

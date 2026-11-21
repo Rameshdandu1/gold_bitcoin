@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from marketintel.indicators import average_true_range, prior_range
 from marketintel.models import Candidate, Candle, EngineDescriptor
+from marketintel.quantitative import QUANT_ENGINE_CONFIGS
 
 BAR_MINUTES = {"1m": 1, "5m": 5, "15m": 15}
 
@@ -41,13 +42,13 @@ ENGINE_CONFIGS = (
 def describe_engines(gold_symbol: str, btc_symbol: str) -> list[EngineDescriptor]:
     return [
         EngineDescriptor(
-            id=engine.engine_id,
+            id=engine.engine,
             asset=engine.asset,
             symbol=gold_symbol if engine.asset == "GOLD" else btc_symbol,
-            resolution=engine.resolution,
+            resolution=engine.primary_resolution,
             horizon_minutes=engine.horizon_minutes,
         )
-        for engine in ENGINE_CONFIGS
+        for engine in QUANT_ENGINE_CONFIGS
     ]
 
 
@@ -126,6 +127,7 @@ def create_candidate(
         snapshot_id=snapshot_id,
         asset=engine.asset,
         symbol=latest.symbol,
+        engine=engine.engine_id,
         horizon_minutes=engine.horizon_minutes,
         candle_close_utc=candle_close,
         observed_at_utc=now,
