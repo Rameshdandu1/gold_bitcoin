@@ -5,7 +5,7 @@
 - [x] Basic data contracts, independent AI consensus, fail-closed defaults
 - [x] Delta REST + WS and basic CoinGlass adapter
 - [x] Simple six-card dashboard, CI and unit tests
-- [ ] GitHub repository created and CI run on GitHub (external operator action)
+- [x] GitHub repository created and CI run on GitHub (verified through merged PR #8).
 
 ## Phase 1 — trustworthy market data (before any live signals)
 - [x] Resolve BTC and gold instruments by `/v2/products`, validate active contract state,
@@ -141,21 +141,49 @@ Detailed instructions: [CODEX_PHASE_5.md](../prompts/CODEX_PHASE_5.md).
 - [x] **5F:** authenticated experiment/engine/opportunity/paper views, authoritative checksummed
   exports, Gold/BTC public fixture workflows and native Windows instructions.
 
-These checkboxes are software acceptance on explicitly synthetic streams. Adequate licensed market
-history, genuine contemporary provider completions, extended prospective observation, live
-integration soaks and destination-host recovery remain empirical/operational gates.
+These checkboxes record Phase 5 implementation delivery and its original synthetic checks. They
+do not close independent acceptance: the
+[Phase 5 review](audits/phase-5-independent-review.md) reproduced P5-01–P5-07 at
+`dfbb59ea91bfc034f4ab4ffa76c0dbda094f5a31`. Its 227-test baseline and public six-detector workflow
+pass, while authorization time, evidence clocks/provenance, complete shared policy, path coverage,
+paper recovery, holdout detail protection and legacy upgrade handling require Phase 6.
 
-## Phase 6 — derivatives/optional execution (separate approval; deferred)
+Adequate licensed market history, genuine contemporary provider completions, extended prospective
+observation, live integration soaks and destination-host recovery remain separate gates.
+
+## Phase 6 — evidence integrity and complete workflow acceptance
+
+Detailed instructions: [CODEX_PHASE_6.md](../prompts/CODEX_PHASE_6.md).
+
+- [ ] **6A:** correct advancing-clock alert authorization and evidence-cutoff alignment; apply
+  preflight to upgraded legacy jobs and explicitly disposition incomplete frozen request policy.
+- [ ] **6B:** preserve quote/provider availability and evidence provenance through all projections;
+  reject contradictory modes and establish complete pre-entry/quote/OHLC path coverage.
+- [ ] **6C:** share admission/material revision/lifecycle/current-risk policy across live-style,
+  historical and connected paper entry points; prove six-engine parity, silence transitions,
+  interrupted full-workflow resume and bounded total memory.
+- [ ] **6D:** make paper transition/progress recovery atomic or equivalently recoverable; preserve
+  immutable retry chronology and verify physical/logical source identity and consumed prefix.
+- [ ] **6E:** protect unopened holdout outcomes across authenticated details, APIs, UI and exports;
+  retain deliberate audited opening and unchanged development metrics.
+- [ ] **6F:** publish a reproducible public Gold/BTC acceptance bundle, migrations and Windows CI;
+  record exact P5-01–P5-07 dispositions and separate unverified destination/empirical gates.
+
+The immediate next phase is correctness and acceptance, followed by controlled collection and
+prospective validation against declared criteria. No fixture, model agreement or completed
+development checklist authorizes execution or establishes an empirical edge.
+
+## Future phase — derivatives/optional execution (separate approval; deferred)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.
 20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's current scope.
 
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
-- M3: implemented with a passing fixture baseline; independent review acceptance remains blocked
-  by the findings assigned to 4A. Live provider/model entitlement, paid-call behavior, Slack delivery,
+- M3: implemented with a passing fixture baseline; remaining dispatch/upgrade findings are assigned
+  to 6A. Live provider/model entitlement, paid-call behavior, Slack delivery,
   Windows installation and extended market soak remain separate operator acceptance gates.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
-- M5 software: the six-engine workflow, outcome evaluator, partitions, paper chronology and operator
-  surfaces agree on immutable hypothetical evidence. M5 empirical readiness remains incomplete
-  until real licensed and prospective evidence exists.
+- M5 software acceptance remains open until the six-engine workflow, outcome evaluator, partitions,
+  paper chronology/recovery and operator surfaces satisfy Phase 6 on immutable hypothetical
+  evidence. M5 empirical readiness additionally requires real licensed and prospective evidence.

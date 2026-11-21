@@ -1,12 +1,23 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
+## Current review and next implementation phase
+
+**Phase 5 is implemented; independent software acceptance remains incomplete.** The review of
+merged PR #8 at `dfbb59ea91bfc034f4ab4ffa76c0dbda094f5a31` passed 227 Python tests and the frontend
+checks, then reproduced seven timing, evidence, recovery, holdout and upgrade issues. Read the
+[independent Phase 5 review](docs/audits/phase-5-independent-review.md) and implement
+[CODEX_PHASE_6.md](prompts/CODEX_PHASE_6.md). Phase 6 closes these contracts and demonstrates the
+complete shared decision/paper workflow. Derivatives and execution remain deferred.
+
 ## Phase 5 research-completion workflow
 
-Phase 5 connects factual-availability replay to the production six-engine detector, frozen four-arm
-decisions, quote-side outcome evaluation, protected time partitions, authoritative exports and a
-prospective paper event ledger. Research and paper state remain isolated from production review,
-budget and notification state. The included generator creates explicitly synthetic Gold/BTC
-software-verification streams; it does not establish strategy accuracy or profitability.
+Phase 5 connects normalized observations to the production six-engine detector, stored four-arm
+decisions, quote-side outcome evaluation, development partitions, exports and a paper event ledger.
+The independent review found that downstream availability/provenance, full lifecycle/risk parity,
+path coverage, protected detail reads and paper recovery need further correction. Research and
+paper state remain isolated from production review, budget and notification state. The generator
+creates explicitly synthetic Gold/BTC software-verification streams; it does not establish strategy
+accuracy or profitability.
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures
@@ -17,9 +28,10 @@ software-verification streams; it does not establish strategy accuracy or profit
 ```
 
 Repeat `run-workflow`, `evaluate` and `report` with the generated BTC manifest/config and
-`phase5-btc-workflow-v1`. Acceptance tests run all six real detectors; fixture provider completions
-remain labelled `SYNTHETIC_FIXTURE`. Missing genuine assessments stay `UNAVAILABLE`. The
-prospective worker is separately bounded and disabled:
+`phase5-btc-workflow-v1`. Existing tests run all six real detectors with explicitly synthetic
+completions. This proves detector integration, not the complete live-style decision path. The
+separate paper worker currently consumes local decision/outcome JSON and is bounded and disabled;
+Phase 6 requires connected outcome derivation and interrupted-process recovery:
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
@@ -32,13 +44,13 @@ prospective worker is separately bounded and disabled:
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-21):** Phase 5 software acceptance uses complete hypothetical Gold/BTC
-streams and negative controls. P4-01 through P4-12 are addressed by regressions or explicitly
-recorded limitations from the
-[independent Phase 4 review](docs/audits/phase-4-independent-review.md). Live provider/model
-entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
-prospective observation duration, destination Windows Server recovery, market-data soak and
-empirical strategy performance remain unverified.
+**Review status (2026-11-21):** many original Phase 4 counterexamples now pass, including new-format
+provider preflight/configuration, expired-result recovery, known pre-entry breaches and corrected
+development comparisons. The [Phase 5 review](docs/audits/phase-5-independent-review.md) records
+what is fixed and what remains open as P5-01–P5-07. Live provider/model entitlement, adequate licensed
+historical data, genuine contemporary AI assessments, Slack delivery, prospective observation
+duration, destination Windows Server recovery, market-data soak and empirical strategy performance
+remain separate unverified gates.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,
