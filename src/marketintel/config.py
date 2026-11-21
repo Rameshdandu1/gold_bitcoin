@@ -27,6 +27,19 @@ class Settings(BaseSettings):
     poll_seconds: int = Field(default=30, ge=10, le=600)
     min_reward_risk: float = Field(default=1.5, ge=1, le=20)
     max_ai_calls_per_day: int = Field(default=50, ge=0)
+    ai_total_deadline_seconds: int = Field(default=90, ge=5, le=600)
+    ai_attempt_timeout_seconds: float = Field(default=25, ge=1, le=120)
+    ai_queue_max_age_seconds: int = Field(default=120, ge=5, le=3600)
+    ai_max_attempts_per_provider: int = Field(default=2, ge=1, le=5)
+    ai_max_output_tokens: int = Field(default=650, ge=64, le=4096)
+    ai_max_input_tokens: int = Field(default=30_000, ge=1000, le=200_000)
+    ai_provider_call_limit_per_day: int = Field(default=25, ge=0)
+    ai_total_call_limit_per_day: int = Field(default=50, ge=0)
+    ai_total_cost_limit_microusd_per_day: int = Field(default=0, ge=0)
+    openai_input_microusd_per_million_tokens: int | None = Field(default=None, ge=0)
+    openai_output_microusd_per_million_tokens: int | None = Field(default=None, ge=0)
+    anthropic_input_microusd_per_million_tokens: int | None = Field(default=None, ge=0)
+    anthropic_output_microusd_per_million_tokens: int | None = Field(default=None, ge=0)
 
     openai_api_key: str = ""
     openai_model: str = ""

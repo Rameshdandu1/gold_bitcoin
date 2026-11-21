@@ -21,6 +21,7 @@ from marketintel.models import (
     FeatureSnapshot,
     RawMarketEvent,
 )
+from marketintel.review import ConsensusDecisionV2, ProviderResult
 
 
 class Store:
@@ -1050,6 +1051,293 @@ class Store:
             )
         return cursor.rowcount == 1
 
+    def review_run(self, run_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT candidate_id, revision_id, envelope_digest, prompt_version, "
+                "schema_version, risk_policy_version, provider_config_json, status, "
+                "created_at_utc, deadline_at_utc FROM review_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        fields = (
+            "candidate_id",
+            "revision_id",
+            "envelope_digest",
+            "prompt_version",
+            "schema_version",
+            "risk_policy_version",
+            "provider_config",
+            "status",
+            "created_at_utc",
+            "deadline_at_utc",
+        )
+        result = dict(zip(fields, row, strict=True))
+        result["provider_config"] = json.loads(result["provider_config"])
+        return result
+
+    def save_provider_result(
+        self,
+        *,
+        run_id: str,
+        job_id: str,
+        owner: str,
+        generation: int,
+        dispatch_id: str,
+        result: ProviderResult,
+    ) -> str | None:
+        attempt_id = hashlib.sha256(
+            f"{run_id}|{result.provider}|{result.attempt_number}|{dispatch_id}".encode()
+        ).hexdigest()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            lease = conn.execute(
+                "SELECT lease_owner, lease_generation FROM review_jobs "
+                "WHERE job_id=? AND run_id=? AND status IN ('CLAIMED', 'DISPATCHED')",
+                (job_id, run_id),
+            ).fetchone()
+            if lease != (owner, generation):
+                return None
+            try:
+                conn.execute(
+                    "INSERT INTO provider_attempts_v2 (attempt_id, run_id, provider, "
+                    "attempt_number, lease_generation, dispatch_id, requested_model, "
+                    "returned_model, status, started_at_utc, completed_at_utc, request_id, "
+                    "response_id, finish_reason, input_tokens, output_tokens, "
+                    "estimated_cost_microusd, actual_cost_microusd, failure_code, "
+                    "assessment_json, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        attempt_id,
+                        run_id,
+                        result.provider,
+                        result.attempt_number,
+                        generation,
+                        dispatch_id,
+                        result.requested_model,
+                        result.returned_model,
+                        result.status,
+                        result.started_at_utc.astimezone(UTC).isoformat(),
+                        result.completed_at_utc.astimezone(UTC).isoformat(),
+                        result.request_id,
+                        result.response_id,
+                        result.finish_reason,
+                        result.usage.input_tokens,
+                        result.usage.output_tokens,
+                        None,
+                        None,
+                        result.failure_code,
+                        result.assessment.model_dump_json() if result.assessment else None,
+                        json.dumps(dict(result.safe_metadata), sort_keys=True),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return None
+        return attempt_id
+
+    def provider_results(self, run_id: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT attempt_id, provider, attempt_number, requested_model, returned_model, "
+                "status, started_at_utc, completed_at_utc, request_id, response_id, "
+                "finish_reason, input_tokens, output_tokens, failure_code, assessment_json, "
+                "metadata_json FROM provider_attempts_v2 WHERE run_id=? "
+                "ORDER BY provider, attempt_number",
+                (run_id,),
+            ).fetchall()
+        fields = (
+            "attempt_id",
+            "provider",
+            "attempt_number",
+            "requested_model",
+            "returned_model",
+            "status",
+            "started_at_utc",
+            "completed_at_utc",
+            "request_id",
+            "response_id",
+            "finish_reason",
+            "input_tokens",
+            "output_tokens",
+            "failure_code",
+            "assessment",
+            "metadata",
+        )
+        results = [dict(zip(fields, row, strict=True)) for row in rows]
+        for result in results:
+            result["assessment"] = (
+                json.loads(result["assessment"]) if result["assessment"] else None
+            )
+            result["metadata"] = json.loads(result["metadata"])
+        return results
+
+    @staticmethod
+    def _eligibility_token_in_transaction(
+        conn: sqlite3.Connection, candidate_id_value: str
+    ) -> tuple[str, dict] | None:
+        active = conn.execute(
+            "SELECT a.revision_id, a.snapshot_id, a.generation, r.payload "
+            "FROM active_candidate_revisions a "
+            "JOIN candidate_revision_identities r ON r.revision_id=a.revision_id "
+            "WHERE a.candidate_id=?",
+            (candidate_id_value,),
+        ).fetchone()
+        if active is None:
+            return None
+        candidate = json.loads(active[3])
+        lifecycle = conn.execute(
+            "SELECT event_id, to_state, occurred_at_utc FROM candidate_lifecycle_events "
+            "WHERE candidate_id=? ORDER BY occurred_at_utc DESC, event_id DESC LIMIT 1",
+            (candidate_id_value,),
+        ).fetchone()
+        watermark = conn.execute(
+            "SELECT received_at_utc, event_id FROM candidate_price_watermarks WHERE candidate_id=?",
+            (candidate_id_value,),
+        ).fetchone()
+        sources = [
+            f"product_discovery:{candidate['asset']}",
+            f"candle_reconciliation:{candidate['symbol']}",
+            f"delta_book:{candidate['symbol']}",
+            "delta_websocket",
+        ]
+        health = []
+        for source in sources:
+            row = conn.execute(
+                "SELECT state, heartbeat_at_utc, last_success_at_utc FROM source_health "
+                "WHERE source=?",
+                (source,),
+            ).fetchone()
+            health.append((source, *(row or (None, None, None))))
+        book = conn.execute(
+            "SELECT updated_at_utc FROM book_checkpoints WHERE symbol=?",
+            (candidate["symbol"],),
+        ).fetchone()
+        evidence = {
+            "candidate_id": candidate_id_value,
+            "revision_id": active[0],
+            "snapshot_id": active[1],
+            "generation": int(active[2]),
+            "lifecycle": lifecycle,
+            "price_watermark": watermark,
+            "source_health": health,
+            "book_checkpoint_at": book[0] if book else None,
+        }
+        token = hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return token, evidence
+
+    def eligibility_token(self, candidate_id_value: str) -> tuple[str, dict] | None:
+        with self._conn() as conn:
+            return self._eligibility_token_in_transaction(conn, candidate_id_value)
+
+    def commit_consensus_decision_and_outbox(
+        self,
+        decision: ConsensusDecisionV2,
+        *,
+        destination_id: str | None = None,
+    ) -> bool:
+        """Conditionally commit a revision decision and its alert intent in one transaction."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._eligibility_token_in_transaction(conn, decision.candidate_id)
+            if current is None:
+                return False
+            token, evidence = current
+            lifecycle = evidence["lifecycle"]
+            if (
+                token != decision.eligibility.eligibility_token
+                or evidence["revision_id"] != decision.candidate_revision_id
+                or evidence["generation"] != decision.eligibility.active_revision_generation
+                or lifecycle is None
+                or lifecycle[1] != decision.eligibility.lifecycle_state
+            ):
+                return False
+            try:
+                conn.execute(
+                    "INSERT INTO consensus_decisions_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        decision.decision_id,
+                        decision.run_id,
+                        decision.candidate_id,
+                        decision.candidate_revision_id,
+                        decision.envelope_digest,
+                        decision.status,
+                        decision.decided_at_utc.astimezone(UTC).isoformat(),
+                        decision.model_dump_json(),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing = conn.execute(
+                    "SELECT payload FROM consensus_decisions_v2 WHERE run_id=?",
+                    (decision.run_id,),
+                ).fetchone()
+                return existing is not None and existing[0] == decision.model_dump_json()
+            if decision.status == "CONFIRMED":
+                if not destination_id:
+                    raise ValueError("Confirmed decision requires an alert destination identity")
+                delivery_key = hashlib.sha256(
+                    (
+                        f"{decision.decision_id}|{decision.candidate_revision_id}|"
+                        f"CONFIRMED|{destination_id}"
+                    ).encode()
+                ).hexdigest()
+                outbox_id = hashlib.sha256(f"outbox|{delivery_key}".encode()).hexdigest()
+                now_text = decision.decided_at_utc.astimezone(UTC).isoformat()
+                conn.execute(
+                    "INSERT OR IGNORE INTO notification_outbox VALUES (?, ?, ?, ?, ?, ?, ?, "
+                    "'PENDING', ?, 0, ?, NULL, NULL, 0, NULL, NULL, ?, ?)",
+                    (
+                        outbox_id,
+                        decision.decision_id,
+                        decision.candidate_id,
+                        decision.candidate_revision_id,
+                        "CONFIRMED",
+                        destination_id,
+                        delivery_key,
+                        decision.model_dump_json(),
+                        now_text,
+                        now_text,
+                        now_text,
+                    ),
+                )
+        return True
+
+    def consensus_decision_v2(self, run_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM consensus_decisions_v2 WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def outbox_items(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT outbox_id, decision_id, candidate_id, revision_id, event_type, "
+                "destination_id, delivery_key, status, payload, attempts, available_at_utc, "
+                "receipt_id, last_error FROM notification_outbox ORDER BY created_at_utc"
+            ).fetchall()
+        fields = (
+            "outbox_id",
+            "decision_id",
+            "candidate_id",
+            "revision_id",
+            "event_type",
+            "destination_id",
+            "delivery_key",
+            "status",
+            "payload",
+            "attempts",
+            "available_at_utc",
+            "receipt_id",
+            "last_error",
+        )
+        result = [dict(zip(fields, row, strict=True)) for row in rows]
+        for item in result:
+            item["payload"] = json.loads(item["payload"])
+        return result
+
     def complete_review_job(
         self,
         job_id: str,
@@ -1062,6 +1350,7 @@ class Store:
         if status not in {"COMPLETED", "WAIT", "FAILED", "DISPATCH_UNKNOWN"}:
             raise ValueError("Invalid terminal review job status")
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.execute(
                 "UPDATE review_jobs SET status=?, lease_owner=NULL, lease_expires_at_utc=NULL, "
                 "updated_at_utc=? WHERE job_id=? AND lease_owner=? AND lease_generation=?",
@@ -1073,6 +1362,12 @@ class Store:
                     generation,
                 ),
             )
+            if cursor.rowcount == 1:
+                conn.execute(
+                    "UPDATE review_runs SET status=? WHERE run_id=(SELECT run_id FROM review_jobs "
+                    "WHERE job_id=?)",
+                    (status, job_id),
+                )
         return cursor.rowcount == 1
 
     def reserve_provider_budget(
@@ -1130,6 +1425,34 @@ class Store:
             except sqlite3.IntegrityError:
                 return None
         return reservation_id
+
+    def reconcile_provider_budget(
+        self,
+        reservation_id: str,
+        *,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        actual_cost_microusd: int | None,
+        status: str,
+        now: datetime,
+    ) -> bool:
+        if status not in {"RECONCILED", "USAGE_UNKNOWN"}:
+            raise ValueError("Invalid budget reconciliation status")
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE budget_ledger SET actual_input_tokens=?, actual_output_tokens=?, "
+                "actual_cost_microusd=?, status=?, reconciled_at_utc=? "
+                "WHERE reservation_id=? AND status='RESERVED'",
+                (
+                    input_tokens,
+                    output_tokens,
+                    actual_cost_microusd,
+                    status,
+                    now.astimezone(UTC).isoformat(),
+                    reservation_id,
+                ),
+            )
+        return cursor.rowcount == 1
 
     def add_candidate(self, candidate: Candidate) -> bool:
         with self._conn() as conn:
