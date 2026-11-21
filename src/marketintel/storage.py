@@ -205,6 +205,7 @@ class Store:
             """)
             self._apply_phase3_migration(conn)
             self._apply_phase4_integration_migration(conn)
+            self._apply_phase5_operational_migration(conn)
             self._backfill_candidate_revision_identities(conn)
 
     def _apply_phase3_migration(self, conn: sqlite3.Connection) -> None:
@@ -409,6 +410,48 @@ class Store:
                 revision_id TEXT NOT NULL,
                 updated_at_utc TEXT NOT NULL
             );
+        """)
+        conn.execute(
+            "INSERT INTO schema_migrations VALUES (?, ?)",
+            (migration_id, datetime.now(UTC).isoformat()),
+        )
+
+    def _apply_phase5_operational_migration(self, conn: sqlite3.Connection) -> None:
+        migration_id = "0005_phase5_operational_fencing"
+        if conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE migration_id=?", (migration_id,)
+        ).fetchone():
+            return
+        conn.executescript("""
+            CREATE TABLE notification_dispatch_authorizations (
+                outbox_id TEXT NOT NULL,
+                lease_generation INTEGER NOT NULL,
+                evidence_token TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                lifecycle_event_id TEXT NOT NULL,
+                authorized_at_utc TEXT NOT NULL,
+                PRIMARY KEY (outbox_id, lease_generation)
+            );
+            CREATE TRIGGER notification_dispatch_authorizations_no_update
+                BEFORE UPDATE ON notification_dispatch_authorizations
+                BEGIN SELECT RAISE(ABORT, 'dispatch authorizations are append-only'); END;
+            CREATE TRIGGER notification_dispatch_authorizations_no_delete
+                BEFORE DELETE ON notification_dispatch_authorizations
+                BEGIN SELECT RAISE(ABORT, 'dispatch authorizations are append-only'); END;
+            CREATE TABLE review_dispositions (
+                disposition_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                code TEXT NOT NULL,
+                occurred_at_utc TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE TRIGGER review_dispositions_no_update
+                BEFORE UPDATE ON review_dispositions
+                BEGIN SELECT RAISE(ABORT, 'review dispositions are append-only'); END;
+            CREATE TRIGGER review_dispositions_no_delete
+                BEFORE DELETE ON review_dispositions
+                BEGIN SELECT RAISE(ABORT, 'review dispositions are append-only'); END;
         """)
         conn.execute(
             "INSERT INTO schema_migrations VALUES (?, ?)",
@@ -1211,12 +1254,53 @@ class Store:
         expires = (now + timedelta(seconds=lease_seconds)).astimezone(UTC).isoformat()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            expired = conn.execute(
+                "SELECT j.job_id, j.run_id, j.status FROM review_jobs j "
+                "JOIN review_runs r ON r.run_id=j.run_id "
+                "WHERE j.status IN ('QUEUED', 'CLAIMED', 'RESULTS_READY') "
+                "AND r.deadline_at_utc<=?",
+                (now_text,),
+            ).fetchall()
+            for job_id, run_id, prior_status in expired:
+                conn.execute(
+                    "UPDATE review_jobs SET status='WAIT', lease_owner=NULL, "
+                    "lease_expires_at_utc=NULL, updated_at_utc=? WHERE job_id=?",
+                    (now_text, job_id),
+                )
+                conn.execute(
+                    "UPDATE review_runs SET status='WAIT' WHERE run_id=?",
+                    (run_id,),
+                )
+                payload = json.dumps(
+                    {
+                        "code": "REVIEW_DEADLINE_EXPIRED",
+                        "prior_status": prior_status,
+                        "redispatched": False,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                disposition_id = hashlib.sha256(
+                    f"{run_id}|REVIEW_DEADLINE_EXPIRED".encode()
+                ).hexdigest()
+                conn.execute(
+                    "INSERT OR IGNORE INTO review_dispositions VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        disposition_id,
+                        run_id,
+                        job_id,
+                        "REVIEW_DEADLINE_EXPIRED",
+                        now_text,
+                        payload,
+                    ),
+                )
             row = conn.execute(
-                "SELECT job_id, run_id, status, lease_generation FROM review_jobs "
-                "WHERE available_at_utc<=? AND (status='QUEUED' OR "
-                "(status IN ('CLAIMED', 'RESULTS_READY') AND lease_expires_at_utc<?)) "
-                "ORDER BY created_at_utc, job_id LIMIT 1",
-                (now_text, now_text),
+                "SELECT j.job_id, j.run_id, j.status, j.lease_generation FROM review_jobs j "
+                "JOIN review_runs r ON r.run_id=j.run_id "
+                "WHERE j.available_at_utc<=? AND (j.status='QUEUED' OR "
+                "(j.status IN ('CLAIMED', 'RESULTS_READY') AND j.lease_expires_at_utc<?)) "
+                "AND r.deadline_at_utc>? ORDER BY j.created_at_utc, j.job_id LIMIT 1",
+                (now_text, now_text, now_text),
             ).fetchone()
             if row is None:
                 return None
@@ -1313,6 +1397,11 @@ class Store:
         )
         result = dict(zip(fields, row, strict=True))
         result["provider_config"] = json.loads(result["provider_config"])
+        result["request_config_digest"] = hashlib.sha256(
+            json.dumps(result["provider_config"], sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
         return result
 
     def save_provider_result(
@@ -1396,8 +1485,10 @@ class Store:
             cursor = conn.execute(
                 "UPDATE review_jobs SET status='RESULTS_READY', updated_at_utc=? "
                 "WHERE job_id=? AND status IN ('CLAIMED', 'DISPATCHED') "
-                "AND lease_owner=? AND lease_generation=? AND lease_expires_at_utc>=?",
-                (now_text, job_id, owner, generation, now_text),
+                "AND lease_owner=? AND lease_generation=? AND lease_expires_at_utc>=? "
+                "AND EXISTS (SELECT 1 FROM review_runs r WHERE r.run_id=review_jobs.run_id "
+                "AND r.deadline_at_utc>?)",
+                (now_text, job_id, owner, generation, now_text, now_text),
             )
             if cursor.rowcount == 1:
                 conn.execute(
@@ -1406,6 +1497,51 @@ class Store:
                     (job_id,),
                 )
         return cursor.rowcount == 1
+
+    def record_review_disposition(
+        self,
+        *,
+        run_id: str,
+        job_id: str,
+        code: str,
+        now: datetime,
+        detail: dict | None = None,
+    ) -> str:
+        payload = json.dumps(
+            {"code": code, **(detail or {})}, sort_keys=True, separators=(",", ":")
+        )
+        disposition_id = hashlib.sha256(f"{run_id}|{code}|{payload}".encode()).hexdigest()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO review_dispositions VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    disposition_id,
+                    run_id,
+                    job_id,
+                    code,
+                    now.astimezone(UTC).isoformat(),
+                    payload,
+                ),
+            )
+        return disposition_id
+
+    def review_dispositions(self, run_id: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT disposition_id, job_id, code, occurred_at_utc, payload "
+                "FROM review_dispositions WHERE run_id=? ORDER BY occurred_at_utc, disposition_id",
+                (run_id,),
+            ).fetchall()
+        return [
+            {
+                "disposition_id": row[0],
+                "job_id": row[1],
+                "code": row[2],
+                "occurred_at_utc": row[3],
+                "detail": json.loads(row[4]),
+            }
+            for row in rows
+        ]
 
     def provider_results(self, run_id: str) -> list[dict]:
         with self._conn() as conn:
@@ -1842,21 +1978,107 @@ class Store:
             return False, "terminal lifecycle intent is no longer current"
         return True, "eligible"
 
-    def mark_outbox_dispatch_started(self, item: dict, *, now: datetime) -> bool:
-        """Persist the point after which remote acceptance may be unknown after a crash."""
+    def mark_outbox_dispatch_started(
+        self,
+        item: dict,
+        *,
+        now: datetime,
+        evidence_token: str | None = None,
+    ) -> bool:
+        """Fence dispatch against the exact locally persisted evidence that was checked."""
+        now_text = now.astimezone(UTC).isoformat()
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status, lease_owner, lease_expires_at_utc, lease_generation, "
+                "revision_id, event_type, payload FROM notification_outbox WHERE outbox_id=?",
+                (item["outbox_id"],),
+            ).fetchone()
+            if (
+                row is None
+                or row[0] != "CLAIMED"
+                or row[1] != item["owner"]
+                or row[2] is None
+                or datetime.fromisoformat(row[2]) < now
+                or int(row[3]) != item["generation"]
+                or row[4] != item["revision_id"]
+            ):
+                return False
+            current = self._eligibility_token_in_transaction(conn, item["candidate_id"])
+            if current is None:
+                return False
+            token, facts = current
+            lifecycle = facts["lifecycle"]
+            payload = json.loads(row[6])
+            if row[5] == "CONFIRMED":
+                if (
+                    not evidence_token
+                    or token != evidence_token
+                    or facts["revision_id"] != item["revision_id"]
+                    or lifecycle is None
+                    or lifecycle[1] != "CANDIDATE"
+                    or now >= datetime.fromisoformat(payload["expires_at_utc"])
+                ):
+                    return False
+            elif (
+                lifecycle is None
+                or lifecycle[0] != payload.get("lifecycle_event_id")
+                or lifecycle[1] != row[5]
+            ):
+                return False
+            lifecycle_event_id = str(lifecycle[0])
+            authorization_token = evidence_token or token
+            try:
+                conn.execute(
+                    "INSERT INTO notification_dispatch_authorizations VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        item["outbox_id"],
+                        item["generation"],
+                        authorization_token,
+                        item["revision_id"],
+                        lifecycle_event_id,
+                        now_text,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return False
             cursor = conn.execute(
                 "UPDATE notification_outbox SET status='DISPATCH_STARTED', updated_at_utc=? "
                 "WHERE outbox_id=? AND status='CLAIMED' AND lease_owner=? "
-                "AND lease_generation=?",
+                "AND lease_generation=? AND lease_expires_at_utc>=?",
                 (
-                    now.astimezone(UTC).isoformat(),
+                    now_text,
                     item["outbox_id"],
                     item["owner"],
                     item["generation"],
+                    now_text,
                 ),
             )
         return cursor.rowcount == 1
+
+    def dispatch_authorization(self, outbox_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT lease_generation, evidence_token, revision_id, lifecycle_event_id, "
+                "authorized_at_utc FROM notification_dispatch_authorizations "
+                "WHERE outbox_id=? ORDER BY lease_generation DESC LIMIT 1",
+                (outbox_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(
+            zip(
+                (
+                    "lease_generation",
+                    "evidence_token",
+                    "revision_id",
+                    "lifecycle_event_id",
+                    "authorized_at_utc",
+                ),
+                row,
+                strict=True,
+            )
+        )
 
     def finish_outbox_attempt(
         self,

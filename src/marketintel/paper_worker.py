@@ -11,7 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from marketintel.config import Settings
-from marketintel.research_models import ArmDecision
+from marketintel.research_models import ArmDecision, ResearchCandidate, ResearchOutcome
 from marketintel.research_storage import PaperLedger
 
 
@@ -23,6 +23,8 @@ class PaperWorkerConfig(BaseModel):
     ledger_path: Path = Path("data/paper.sqlite3")
     production_database_path: Path = Path("data/marketintel.sqlite3")
     recorded_decisions_path: Path | None = None
+    source_identity: str | None = None
+    source_generation: int = Field(default=1, ge=1)
     maximum_records_per_cycle: int = Field(default=100, ge=1, le=10_000)
 
 
@@ -32,28 +34,83 @@ def run_cycle(config: PaperWorkerConfig, *, now: datetime | None = None) -> dict
         return {"status": "DISABLED", "recorded": 0}
     if config.recorded_decisions_path is None:
         return {"status": "NO_LOCAL_INPUT", "recorded": 0}
+    if not config.source_identity:
+        raise ValueError("Paper source_identity is required when local input is enabled")
     ledger = PaperLedger(config.ledger_path, production_path=config.production_database_path)
-    cursor = int(ledger.cursor("recorded_decisions") or "0")
-    recorded = 0
+    with config.recorded_decisions_path.open("r", encoding="utf-8") as handle:
+        source_size = sum(1 for _ in handle)
+    binding = ledger.cursor_binding("recorded_decisions")
+    if binding is not None and (
+        binding["source_identity"] != config.source_identity
+        or int(binding["generation"]) != config.source_generation
+    ):
+        raise ValueError("Paper source identity/generation changed")
+    cursor = int(binding["cursor"]) if binding else 0
+    if source_size < cursor:
+        raise ValueError("Paper source was truncated below its committed cursor")
+    ledger.bind_cursor(
+        "recorded_decisions",
+        source_identity=config.source_identity,
+        generation=config.source_generation,
+        cursor=cursor,
+        source_size=source_size,
+        now=now,
+    )
+    decisions = 0
+    outcomes = 0
     next_cursor = cursor
     with config.recorded_decisions_path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle):
             if line_number < cursor or not line.strip():
                 continue
             payload = json.loads(line)
-            decision = ArmDecision.model_validate(payload["decision"])
-            ledger.record_decision(
-                payload["opportunity_id"],
-                payload["revision_id"],
-                decision,
-                recorded_at=now or datetime.now(UTC),
-            )
-            recorded += 1
+            kind = payload.get("type", "DECISION")
+            if kind == "DECISION":
+                decision = ArmDecision.model_validate(payload["decision"])
+                candidate = ResearchCandidate.model_validate(payload["candidate"])
+                ledger.record_decision(
+                    payload["opportunity_id"],
+                    payload["revision_id"],
+                    decision,
+                    candidate=candidate,
+                    config_hash=payload["config_hash"],
+                    target_index=int(payload["target_index"]),
+                    source_identity=config.source_identity,
+                    evidence_mode=payload.get("evidence_mode", "PROSPECTIVE"),
+                    entry_latency_ms=int(payload.get("entry_latency_ms", 0)),
+                    recorded_at=now or datetime.now(UTC),
+                )
+                decisions += 1
+            elif kind == "OUTCOME":
+                outcome = ResearchOutcome.model_validate(payload["outcome"])
+                ledger.record_outcome(
+                    payload["revision_id"],
+                    outcome,
+                    recorded_at=now or datetime.now(UTC),
+                )
+                outcomes += 1
+            else:
+                raise ValueError(f"Unsupported paper stream event type: {kind}")
             next_cursor = line_number + 1
-            if recorded >= config.maximum_records_per_cycle:
+            ledger.bind_cursor(
+                "recorded_decisions",
+                source_identity=config.source_identity,
+                generation=config.source_generation,
+                cursor=next_cursor,
+                source_size=source_size,
+                now=now,
+            )
+            if decisions + outcomes >= config.maximum_records_per_cycle:
                 break
-    ledger.set_cursor("recorded_decisions", str(next_cursor), now=now)
-    return {"status": "RECORDED", "recorded": recorded, "cursor": next_cursor}
+    return {
+        "status": "RECORDED",
+        "recorded": decisions + outcomes,
+        "decisions": decisions,
+        "outcomes": outcomes,
+        "cursor": next_cursor,
+        "source_identity": config.source_identity,
+        "source_generation": config.source_generation,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

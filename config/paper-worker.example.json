@@ -4,5 +4,7 @@
   "ledger_path": "data/paper.sqlite3",
   "production_database_path": "data/marketintel.sqlite3",
   "recorded_decisions_path": null,
+  "source_identity": null,
+  "source_generation": 1,
   "maximum_records_per_cycle": 100
 }

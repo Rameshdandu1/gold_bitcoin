@@ -26,12 +26,19 @@ _KIND_ORDER = {
     "CANDLE_OBSERVATION": 5,
     "CANDIDATE": 6,
     "PROVIDER_COMPLETION": 7,
-    "EXPIRY": 8,
+    "EXECUTABLE_QUOTE": 8,
+    "EXPIRY": 9,
 }
+
+_RETAINED_OBSERVATION_LIMIT = 128
 
 
 def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+
+
+def _chain(previous: str, value: object) -> str:
+    return hashlib.sha256(previous.encode("ascii") + b"\n" + _canonical(value)).hexdigest()
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -44,6 +51,7 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
 
 def load_manifest(path: Path, *, verify_files: bool = True) -> DatasetManifest:
     manifest = DatasetManifest.model_validate_json(path.read_text(encoding="utf-8"))
+    manifest.validate_identity()
     if verify_files:
         for evidence in manifest.files:
             evidence_path = (path.parent / evidence.path).resolve()
@@ -164,41 +172,78 @@ def replay(
     progress: Callable[[int], None] | None = None,
 ) -> tuple[list[ReplayPoint], ReplayCheckpoint]:
     """Replay by availability time; exchange timestamps never reveal records early."""
+    if manifest.dataset_id != config.dataset_id:
+        raise ValueError("Experiment dataset does not match replay manifest")
     ordered = observations if presorted else sorted(observations, key=_sort_key)
+    config_hash = config.canonical_config_hash()
     if checkpoint is not None:
         if checkpoint.experiment_id != config.experiment_id:
             raise ValueError("Checkpoint belongs to another experiment")
         if checkpoint.dataset_hash != manifest.content_hash:
             raise ValueError("Checkpoint dataset hash differs")
+        if checkpoint.config_hash != config_hash:
+            raise ValueError("Checkpoint experiment configuration differs")
+        if checkpoint.state_schema_version != "phase5-bounded-v1":
+            raise ValueError("Checkpoint state schema is unsupported")
         next_evaluation = checkpoint.next_evaluation_utc
         offset = checkpoint.input_offset
         visible = list(checkpoint.visible_observation_ids)
+        visible_count = checkpoint.visible_count
+        evidence_hash = checkpoint.evidence_hash
+        input_prefix_hash = checkpoint.input_prefix_hash
         rolling_hash = checkpoint.rolling_hash
         completed = checkpoint.points_completed
     else:
         next_evaluation = config.evaluation_start_utc
         offset = 0
         visible = []
+        visible_count = 0
+        evidence_hash = "0" * 64
+        input_prefix_hash = "0" * 64
         rolling_hash = "0" * 64
         completed = 0
     iterator = iter(ordered)
+    checked_prefix_hash = "0" * 64
+    checked_evidence_hash = "0" * 64
+    checked_visible: list[str] = []
     try:
         for _ in range(offset):
-            next(iterator)
+            prior = next(iterator)
+            checked_prefix_hash = _chain(checked_prefix_hash, prior.model_dump(mode="json"))
+            checked_evidence_hash = _chain(checked_evidence_hash, prior.model_dump(mode="json"))
+            checked_visible.append(prior.observation_id)
+            if len(checked_visible) > _RETAINED_OBSERVATION_LIMIT:
+                del checked_visible[:-_RETAINED_OBSERVATION_LIMIT]
     except StopIteration as exc:
         raise ValueError("Checkpoint offset exceeds dataset") from exc
+    if checkpoint is not None and (
+        checked_prefix_hash != input_prefix_hash
+        or checked_evidence_hash != evidence_hash
+        or tuple(checked_visible) != tuple(visible)
+        or visible_count != offset
+    ):
+        raise ValueError("Checkpoint input prefix or bounded state differs")
     next_observation = next(iterator, None)
     points: list[ReplayPoint] = []
     cadence = timedelta(seconds=config.evaluation_cadence_seconds)
     while next_evaluation <= config.evaluation_end_utc:
         while next_observation is not None and next_observation.available_at_utc <= next_evaluation:
             visible.append(next_observation.observation_id)
+            if len(visible) > _RETAINED_OBSERVATION_LIMIT:
+                del visible[:-_RETAINED_OBSERVATION_LIMIT]
+            normalized = next_observation.model_dump(mode="json")
+            input_prefix_hash = _chain(input_prefix_hash, normalized)
+            evidence_hash = _chain(evidence_hash, normalized)
             offset += 1
+            visible_count += 1
             next_observation = next(iterator, None)
         status, reason = _coverage_status(manifest, next_evaluation)
         payload = {
             "at": next_evaluation.isoformat(),
-            "visible": visible,
+            "retained_visible": visible,
+            "visible_count": visible_count,
+            "evidence_hash": evidence_hash,
+            "config_hash": config_hash,
             "status": status,
             "reason": reason,
             "previous": rolling_hash,
@@ -208,10 +253,11 @@ def replay(
             ReplayPoint(
                 evaluated_at_utc=next_evaluation,
                 visible_observation_ids=tuple(visible),
-                visible_count=len(visible),
+                visible_count=visible_count,
                 status=status,
                 reason=reason,
                 rolling_hash=rolling_hash,
+                evidence_hash=evidence_hash,
             )
         )
         completed += 1
@@ -223,9 +269,14 @@ def replay(
     return points, ReplayCheckpoint(
         experiment_id=config.experiment_id,
         dataset_hash=manifest.content_hash,
+        config_hash=config_hash,
+        state_schema_version="phase5-bounded-v1",
         next_evaluation_utc=next_evaluation,
         input_offset=offset,
         visible_observation_ids=tuple(visible),
+        visible_count=visible_count,
+        evidence_hash=evidence_hash,
+        input_prefix_hash=input_prefix_hash,
         rolling_hash=rolling_hash,
         points_completed=completed,
     )

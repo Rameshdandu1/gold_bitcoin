@@ -8,7 +8,7 @@ import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,7 +42,7 @@ def _authorized(request: Request, settings: Settings) -> bool:
 def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
     settings = settings or Settings()
     store = store or Store(settings.database_path)
-    app = FastAPI(title=settings.app_name, version="0.4.0")
+    app = FastAPI(title=settings.app_name, version="0.5.0")
     allowed_origins = tuple(
         origin.strip() for origin in settings.cors_allowed_origins_csv.split(",") if origin.strip()
     )
@@ -92,7 +92,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             <= settings.delta_discovery_refresh_seconds + 60
         )
         checks = {
-            "database_migration": "0004_phase4_integration_corrections" in store.migration_ids(),
+            "database_migration": "0005_phase5_operational_fencing" in store.migration_ids(),
             "operator_authentication": (
                 not settings.operator_auth_enabled
                 or bool(
@@ -215,13 +215,59 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         paper_ledger = PaperLedger(
             settings.paper_database_path, production_path=settings.database_path
         )
+        summary = research_store.summary()
+        latest = summary.get("latest_experiment")
+        detail = research_store.experiment_detail(latest["experiment_id"]) if latest else None
+        actions = detail.get("action_counts") if detail else None
         return {
-            **research_store.summary(),
+            **summary,
             "paper": paper_ledger.summary(),
-            "data_mode": "NO_DATASET_SELECTED",
-            "external_calls_performed": 0,
-            "real_notifications_sent": 0,
+            "data_mode": latest["data_mode"] if latest else "NO_DATASET_SELECTED",
+            "selected_experiment_id": latest["experiment_id"] if latest else None,
+            "external_calls_performed": actions["external_calls"] if actions else None,
+            "real_notifications_sent": actions["real_notifications"] if actions else None,
+            "orders_placed": actions["orders"] if actions else None,
+            "counter_scope": actions["scope"] if actions else "NOT_MEASURED",
         }
+
+    @app.get("/api/research/experiments")
+    def research_experiments(limit: int = 50, offset: int = 0) -> list[dict]:
+        return ResearchStore(
+            settings.research_database_path, production_path=settings.database_path
+        ).experiments(limit=limit, offset=offset)
+
+    @app.get("/api/research/experiments/{experiment_id}")
+    def research_experiment(experiment_id: str) -> dict:
+        detail = ResearchStore(
+            settings.research_database_path, production_path=settings.database_path
+        ).experiment_detail(experiment_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Research experiment not found")
+        return detail
+
+    @app.get("/api/research/experiments/{experiment_id}/engines")
+    def research_engines(experiment_id: str) -> list[dict]:
+        research_store = ResearchStore(
+            settings.research_database_path, production_path=settings.database_path
+        )
+        if research_store.experiment(experiment_id) is None:
+            raise HTTPException(status_code=404, detail="Research experiment not found")
+        return research_store.engine_matrix(experiment_id)
+
+    @app.get("/api/research/experiments/{experiment_id}/opportunities")
+    def research_opportunities(experiment_id: str, limit: int = 50, offset: int = 0) -> list[dict]:
+        research_store = ResearchStore(
+            settings.research_database_path, production_path=settings.database_path
+        )
+        if research_store.experiment(experiment_id) is None:
+            raise HTTPException(status_code=404, detail="Research experiment not found")
+        return research_store.opportunity_page(experiment_id, limit=limit, offset=offset)
+
+    @app.get("/api/research/paper/transitions")
+    def research_paper_transitions(limit: int = 100, offset: int = 0) -> list[dict]:
+        return PaperLedger(
+            settings.paper_database_path, production_path=settings.database_path
+        ).transitions(limit=limit, offset=offset)
 
     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if dist.is_dir():

@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "dataset_id": "fixture-dataset-001",
-  "content_hash": "71daa655b918181d8499527e85fdaa907ee7793f899347ce199927fc554e5c7f",
+  "content_hash": "bbac400aeba5fdc91207752fdc6b593b3ed9d31043fb26b413b7f93936e0929c",
   "code_commit": "d1978d30e48c0b8656d969da00ea70a7e4659562",
   "rule_version": "phase4-fixture-rules-v1",
   "feature_version": "phase4-fixture-features-v1",

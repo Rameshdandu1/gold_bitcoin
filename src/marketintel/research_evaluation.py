@@ -105,6 +105,7 @@ def evaluate_quotes(
     policy: CostPolicy,
     *,
     target_index: int = 1,
+    entry_latency_ms: int = 0,
 ) -> ResearchOutcome:
     """Evaluate against ordered executable quotes using each arm's real ready time."""
     if target_index < 1 or target_index > len(candidate.targets):
@@ -132,8 +133,10 @@ def evaluate_quotes(
         return _outcome(
             candidate, decision, target_index, code, decision.reason, complete=code == "NO_ENTRY"
         )
-    ready = decision.ready_at_utc + timedelta(milliseconds=decision.provider_latency_ms)
-    if ready > candidate.expires_at_utc:
+    if entry_latency_ms < 0:
+        raise ValueError("Entry latency cannot be negative")
+    ready = decision.ready_at_utc + timedelta(milliseconds=entry_latency_ms)
+    if ready >= candidate.expires_at_utc:
         return _outcome(
             candidate,
             decision,
@@ -143,14 +146,36 @@ def evaluate_quotes(
             complete=True,
         )
     ordered = sorted(quotes, key=lambda row: (row.observed_at_utc, row.event_id))
-    relevant = [
+    matching = [
         row
         for row in ordered
         if row.venue == candidate.venue
         and row.symbol == candidate.symbol
-        and ready <= row.observed_at_utc <= candidate.expires_at_utc
+        and candidate.observed_at_utc <= row.observed_at_utc <= candidate.expires_at_utc
     ]
-    if not relevant:
+    target = candidate.targets[target_index - 1]
+    pre_entry = [row for row in matching if row.observed_at_utc < ready]
+    for row in pre_entry:
+        stop_hit = (
+            row.bid <= candidate.invalidation
+            if candidate.direction == "BULLISH"
+            else row.ask >= candidate.invalidation
+        )
+        target_hit = row.bid >= target if candidate.direction == "BULLISH" else row.ask <= target
+        if stop_hit or target_hit:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "NO_ENTRY",
+                "INVALIDATED_BEFORE_ENTRY" if stop_hit else "TARGET_PASSED_BEFORE_ENTRY",
+                events=(row.event_id,),
+                complete=True,
+            )
+    entry_quotes = [
+        row for row in matching if ready <= row.observed_at_utc < candidate.expires_at_utc
+    ]
+    if not entry_quotes:
         return _outcome(
             candidate,
             decision,
@@ -159,7 +184,7 @@ def evaluate_quotes(
             "NO_EXECUTABLE_QUOTE_BEFORE_EXPIRY",
             complete=False,
         )
-    first = relevant[0]
+    first = entry_quotes[0]
     if (first.observed_at_utc - ready).total_seconds() > policy.maximum_quote_gap_seconds:
         return _outcome(
             candidate,
@@ -184,7 +209,6 @@ def evaluate_quotes(
             complete=False,
         )
     entry = _entry_fill(candidate, first, policy, instrument.tick_size)
-    target = candidate.targets[target_index - 1]
     risk_breached_at_entry = (
         entry >= candidate.invalidation
         if candidate.direction == "BEARISH"
@@ -205,7 +229,44 @@ def evaluate_quotes(
         )
     favorable = Decimal(0)
     adverse = Decimal(0)
+    relevant = [
+        row
+        for row in matching
+        if first.observed_at_utc <= row.observed_at_utc <= candidate.expires_at_utc
+    ]
+    previous = first
     for quote in relevant:
+        if (quote.observed_at_utc - previous.observed_at_utc).total_seconds() > (
+            policy.maximum_quote_gap_seconds
+        ):
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "QUOTE_PATH_GAP_EXCEEDED",
+                events=(previous.event_id, quote.event_id),
+                complete=False,
+                entry_at=first.observed_at_utc,
+                entry=entry,
+                favorable_excursion=favorable,
+                adverse_excursion=adverse,
+            )
+        if not (
+            instrument.valid_from_utc <= quote.observed_at_utc
+            and (instrument.valid_to_utc is None or quote.observed_at_utc < instrument.valid_to_utc)
+        ):
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "INSTRUMENT_VERSION_CHANGED_DURING_PATH",
+                events=(quote.event_id,),
+                complete=False,
+                entry_at=first.observed_at_utc,
+                entry=entry,
+            )
         if candidate.direction == "BULLISH":
             hit_target = quote.bid >= target
             hit_stop = quote.bid <= candidate.invalidation
@@ -238,6 +299,7 @@ def evaluate_quotes(
                 favorable_excursion=favorable,
                 adverse_excursion=adverse,
             )
+        previous = quote
     last = relevant[-1]
     if last.observed_at_utc < candidate.expires_at_utc:
         return _outcome(
@@ -280,15 +342,33 @@ def evaluate_bar_path(
     bars: Iterable[PriceBar],
     *,
     target_index: int = 1,
+    entry_latency_ms: int = 0,
 ) -> ResearchOutcome:
     """Classify OHLC-only paths; never invent ordering inside a bar."""
     if target_index < 1 or target_index > len(candidate.targets):
         raise ValueError("Target identity is the original one-based candidate index")
+    if decision.state != "APPROVED":
+        code = "NO_ENTRY" if decision.state in {"REJECTED", "WAIT"} else "INCOMPLETE"
+        return _outcome(
+            candidate, decision, target_index, code, decision.reason, complete=code == "NO_ENTRY"
+        )
+    if entry_latency_ms < 0:
+        raise ValueError("Entry latency cannot be negative")
+    ready = decision.ready_at_utc + timedelta(milliseconds=entry_latency_ms)
+    if ready >= candidate.expires_at_utc:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "NO_ENTRY",
+            "DECISION_READY_AFTER_EXPIRY",
+            complete=True,
+        )
     target = candidate.targets[target_index - 1]
     for bar in sorted(bars, key=lambda row: (row.end_utc, row.event_id)):
         if bar.venue != candidate.venue or bar.symbol != candidate.symbol:
             continue
-        if bar.end_utc < decision.ready_at_utc or bar.start_utc > candidate.expires_at_utc:
+        if bar.end_utc <= candidate.observed_at_utc or bar.start_utc >= candidate.expires_at_utc:
             continue
         target_hit = bar.high >= target if candidate.direction == "BULLISH" else bar.low <= target
         stop_hit = (
@@ -296,6 +376,48 @@ def evaluate_bar_path(
             if candidate.direction == "BULLISH"
             else bar.high >= candidate.invalidation
         )
+        if bar.start_utc < ready < bar.end_utc:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "PARTIAL_BAR_OVERLAPS_ENTRY_BOUNDARY",
+                events=(bar.event_id,),
+                complete=False,
+            )
+        if bar.start_utc < candidate.expires_at_utc < bar.end_utc:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "BAR_OVERLAPS_EXPIRY_BOUNDARY",
+                events=(bar.event_id,),
+                complete=False,
+            )
+        if bar.end_utc <= ready:
+            if target_hit or stop_hit:
+                return _outcome(
+                    candidate,
+                    decision,
+                    target_index,
+                    "NO_ENTRY",
+                    "INVALIDATED_BEFORE_ENTRY" if stop_hit else "TARGET_PASSED_BEFORE_ENTRY",
+                    events=(bar.event_id,),
+                    complete=bar.complete,
+                )
+            continue
+        if not bar.complete:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "PARTIAL_BAR_IN_OUTCOME_PATH",
+                events=(bar.event_id,),
+                complete=False,
+            )
         if target_hit and stop_hit:
             return _outcome(
                 candidate,
@@ -340,7 +462,14 @@ def purged_folds(
         for item in groups
         if holdout_start is not None and min(x.observed_at_utc for x in item[1]) >= holdout_start
     ]
-    groups = [item for item in groups if item not in holdout]
+    holdout_crossing = [
+        item
+        for item in groups
+        if holdout_start is not None
+        and item not in holdout
+        and max(x.label_information_end_utc for x in item[1]) >= holdout_start
+    ]
+    groups = [item for item in groups if item not in holdout and item not in holdout_crossing]
     if len(groups) < fold_count:
         raise ValueError("Insufficient opportunity groups for requested folds")
     folds: list[dict[str, tuple[str, ...]]] = []
@@ -353,19 +482,28 @@ def purged_folds(
         embargo = timedelta(seconds=embargo_seconds)
         train = []
         purged = []
-        for opportunity_id, rows in groups[:start] + groups[end:]:
+        for opportunity_id, rows in groups[:start]:
             overlaps = any(
                 row.label_information_start_utc <= test_end + embargo
                 and row.label_information_end_utc >= test_start - embargo
                 for row in rows
             )
             (purged if overlaps else train).append(opportunity_id)
+        for opportunity_id, rows in groups[end:]:
+            overlaps = any(
+                row.label_information_start_utc <= test_end + embargo
+                and row.label_information_end_utc >= test_start - embargo
+                for row in rows
+            )
+            if overlaps:
+                purged.append(opportunity_id)
         folds.append(
             {
                 "train": tuple(train),
                 "test": tuple(key for key, _ in test),
-                "purged": tuple(purged),
+                "purged": tuple(purged + [key for key, _ in holdout_crossing]),
                 "holdout": tuple(key for key, _ in holdout),
+                "future": tuple(key for key, _ in groups[end:] if key not in purged),
             }
         )
     return folds
@@ -382,18 +520,60 @@ def arm_metrics(opportunities: Iterable[OpportunityRecord]) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for arm, records in sorted(by_arm.items()):
         outcomes = [row.outcome for row in records if row.outcome is not None]
-        complete = [row for row in outcomes if row.data_complete and row.net_pnl is not None]
+        complete_records = [
+            row
+            for row in records
+            if row.outcome is not None
+            and row.outcome.data_complete
+            and row.outcome.net_pnl is not None
+        ]
+        complete = [row.outcome for row in complete_records if row.outcome is not None]
         gains = sum((row.net_pnl for row in complete if row.net_pnl > 0), Decimal(0))
         losses = -sum((row.net_pnl for row in complete if row.net_pnl < 0), Decimal(0))
+        known_abstentions = [
+            row
+            for row in records
+            if row.state in {"REJECTED", "WAIT", "NO_ENTRY"}
+            and (row.outcome is None or row.outcome.code == "NO_ENTRY")
+        ]
+        unresolved = [
+            row
+            for row in records
+            if row.state != "UNAVAILABLE"
+            and row not in known_abstentions
+            and (row.outcome is None or not row.outcome.data_complete)
+        ]
+        model_cost = sum(
+            (Decimal(row.attributable_cost_microusd) / Decimal(1_000_000) for row in records),
+            Decimal(0),
+        )
+        operational_pnl = sum((row.net_pnl for row in complete), Decimal(0)) - sum(
+            (
+                Decimal(row.attributable_cost_microusd) / Decimal(1_000_000)
+                for row in complete_records + known_abstentions
+            ),
+            Decimal(0),
+        )
         result[arm] = {
             "opportunity_denominator": total,
             "observed_records": len(records),
             "unavailable": sum(row.state == "UNAVAILABLE" for row in records),
             "rejected_or_wait": sum(row.state in {"REJECTED", "WAIT"} for row in records),
+            "known_no_position": len(known_abstentions),
+            "unresolved": len(unresolved),
+            "approved": sum(row.state in {"APPROVED", "NO_ENTRY", "EXECUTABLE"} for row in records),
+            "executable": sum(row.state == "EXECUTABLE" for row in records),
             "complete_executions": len(complete),
             "latency_ms_total": sum(row.provider_latency_ms for row in records),
             "attributable_cost_microusd": sum(row.attributable_cost_microusd for row in records),
             "net_pnl": str(sum((row.net_pnl for row in complete), Decimal(0))),
+            "operational_net_pnl_after_attributable_ai_cost": str(operational_pnl),
+            "attributable_ai_cost_usd": str(model_cost),
+            "target_before_stop": sum(row.code == "TARGET_BEFORE_STOP" for row in outcomes),
+            "stop_before_target": sum(row.code == "STOP_BEFORE_TARGET" for row in outcomes),
+            "time_exit": sum(row.code == "TIME_EXIT" for row in outcomes),
+            "ambiguous": sum(row.code == "AMBIGUOUS" for row in outcomes),
+            "incomplete": sum(row.code == "INCOMPLETE" for row in outcomes),
             "mean_favorable_excursion": (
                 str(
                     sum(
@@ -436,25 +616,35 @@ def paired_day_block_difference(
     day_values: dict[str, list[Decimal]] = defaultdict(list)
     denominator = 0
     paired = 0
+
+    def operational_value(record: ArmRecord | None) -> Decimal | None:
+        if record is None or record.state == "UNAVAILABLE":
+            return None
+        cost = Decimal(record.attributable_cost_microusd) / Decimal(1_000_000)
+        if record.state in {"REJECTED", "WAIT", "NO_ENTRY"} and (
+            record.outcome is None or record.outcome.code == "NO_ENTRY"
+        ):
+            return -cost
+        if (
+            record.outcome is None
+            or record.outcome.net_pnl is None
+            or not record.outcome.data_complete
+        ):
+            return None
+        return record.outcome.net_pnl - cost
+
     for opportunity in opportunities:
         denominator += 1
         arms = {row.arm: row for row in opportunity.arms}
         baseline = arms.get(baseline_arm)
         comparison = arms.get(comparison_arm)
-        if (
-            baseline is None
-            or comparison is None
-            or baseline.outcome is None
-            or comparison.outcome is None
-            or baseline.outcome.net_pnl is None
-            or comparison.outcome.net_pnl is None
-            or not baseline.outcome.data_complete
-            or not comparison.outcome.data_complete
-        ):
+        baseline_value = operational_value(baseline)
+        comparison_value = operational_value(comparison)
+        if baseline_value is None or comparison_value is None:
             continue
         paired += 1
         day = opportunity.label_information_end_utc.date().isoformat()
-        day_values[day].append(comparison.outcome.net_pnl - baseline.outcome.net_pnl)
+        day_values[day].append(comparison_value - baseline_value)
     day_means = [sum(values, Decimal(0)) / len(values) for _, values in sorted(day_values.items())]
     if len(day_means) < minimum_days:
         return {

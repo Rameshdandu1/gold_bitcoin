@@ -12,6 +12,7 @@ import httpx
 
 from marketintel.analysis import load_canonical_analysis
 from marketintel.config import Settings
+from marketintel.consensus import evaluate_current_risk
 from marketintel.review_worker import current_eligibility
 from marketintel.storage import Store
 
@@ -133,6 +134,7 @@ class AlertWorker:
                 error=reason,
             )
             return True
+        dispatch_started = False
         if item["event_type"] == "CONFIRMED":
             decision = self.store.consensus_decision_by_id(item["decision_id"])
             payload = (
@@ -149,26 +151,55 @@ class AlertWorker:
                 )
                 return True
             analysis = load_canonical_analysis(payload, decision["envelope_digest"])
-            current = current_eligibility(self.store, self.settings, analysis, now=now)
-            current_checks = {
-                "stop breach": not current.stop_breached,
-                "target exhaustion": not current.target_crossed_indices,
-                "event ordering": not current.event_order_ambiguous,
-                "instrument discovery": current.discovery_current,
-                "candle reconciliation": current.reconciliation_current,
-                "trade stream": current.trade_stream_current,
-                "validated book": current.book_current,
-            }
-            failed = [name for name, passed in current_checks.items() if not passed]
-            if failed:
+            frozen_risk = decision["eligibility"]
+            for _ in range(2):
+                current = current_eligibility(self.store, self.settings, analysis, now=now)
+                current = current.model_copy(
+                    update={
+                        "required_costs_known": frozen_risk["required_costs_known"],
+                        "fee_bps": frozen_risk["fee_bps"],
+                        "slippage_bps": frozen_risk["slippage_bps"],
+                        "maximum_entry_drift_bps": frozen_risk["maximum_entry_drift_bps"],
+                        "maximum_spread_bps": frozen_risk["maximum_spread_bps"],
+                        "minimum_net_reward_risk": frozen_risk["minimum_net_reward_risk"],
+                        "calendar_policy": frozen_risk["calendar_policy"],
+                    }
+                )
+                risk = evaluate_current_risk(
+                    analysis,
+                    current,
+                    tuple(decision["supported_target_indices"]),
+                )
+                if not risk.eligible:
+                    detail = (
+                        ", ".join(gate.code for gate in risk.gates if not gate.passed)
+                        or risk.reason
+                    )
+                    self.store.finish_outbox_attempt(
+                        item,
+                        status="SUPPRESSED",
+                        now=now,
+                        error="current confirmation gate failed: " + detail,
+                    )
+                    return True
+                if self.store.mark_outbox_dispatch_started(
+                    item,
+                    now=now,
+                    evidence_token=current.eligibility_token,
+                ):
+                    dispatch_started = True
+                    break
+            if not dispatch_started:
                 self.store.finish_outbox_attempt(
                     item,
                     status="SUPPRESSED",
                     now=now,
-                    error="current confirmation gate failed: " + ", ".join(failed),
+                    error="market evidence changed during dispatch authorization",
                 )
                 return True
-        if not self.store.mark_outbox_dispatch_started(item, now=now):
+        elif self.store.mark_outbox_dispatch_started(item, now=now):
+            dispatch_started = True
+        if not dispatch_started:
             return True
         try:
             receipt = await self.transport.send(
