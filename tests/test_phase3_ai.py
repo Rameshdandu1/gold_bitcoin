@@ -375,9 +375,7 @@ async def test_incomplete_dual_provider_configuration_makes_zero_paid_calls(tmp_
     ).execute(analysis, run_id=run_id, claim=claim)
 
     assert [result.status for result in results] == ["NOT_READY", "NOT_READY"]
-    assert all(
-        result.failure_code == "DUAL_PROVIDER_CONFIGURATION_MISSING" for result in results
-    )
+    assert all(result.failure_code == "DUAL_PROVIDER_CONFIGURATION_MISSING" for result in results)
     assert gpt_transport.calls == claude_transport.calls == 0
 
 
