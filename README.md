@@ -1,12 +1,24 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
+## Current task: Phase 6 closeout
+
+The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) of merged PR #10 at
+`f66ac11f4d958a0075d7e22a5d841256e19b55df` passed the 237-test baseline and positive public Gold/BTC
+workflows. It reproduced five remaining finding groups and confirmed three unfinished software
+acceptance gates. Follow [CODEX_PHASE_6_CLOSEOUT.md](prompts/CODEX_PHASE_6_CLOSEOUT.md).
+
+The remaining sequence is Phase 6 software closeout, controlled Windows/live integration validation,
+then prospective paper observation. Derivatives/execution remain deferred. The next task completes
+existing requirements; it does not expand the feature scope.
+
 ## Phase 6 evidence-integrity workflow
 
-Phase 6 preserves factual event/completion/availability clocks and evidence modes from normalized
-input through the six-engine detector, frozen four-arm decisions, quote-side outcomes, protected
-partitions, exports and a connected paper ledger. Research and paper state remain isolated from
-production review, budget and notification state. The included generator creates explicitly
-synthetic Gold/BTC verification streams; it does not establish strategy accuracy or profitability.
+Phase 6 adds availability/provenance fields, cadence evaluation, quote-side outcomes, protected
+ordinary research reads and a connected synthetic paper command. The review identified remaining
+clock-conflict, coverage, paper-holdout and terminal/progress failures; complete shared policy,
+derived-state resume and bounded whole-workflow memory also remain open. Research and paper state
+remain isolated from production review, budget and notification state. The included generator
+creates synthetic verification streams; it does not establish strategy accuracy or profitability.
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures

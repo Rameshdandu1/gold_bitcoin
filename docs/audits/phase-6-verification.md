@@ -10,6 +10,16 @@ Starting code: `dfbb59ea91bfc034f4ab4ffa76c0dbda094f5a31`
 Instruction revision: `413711c122f5a625a0ff78688d451aebd848e234`  
 Final implementation code: `dcf4cbd` (`feat: enforce phase 6 evidence integrity`)
 
+> **Later independent review:** this report preserves the implementation team's original checks
+> and dispositions. The [independent Phase 6 review](phase-6-independent-review.md) at merged main
+> `f66ac11f4d958a0075d7e22a5d841256e19b55df` passed the 237-test baseline and positive workflows,
+> verified substantial corrections, and reproduced five remaining finding groups. These qualify
+> the closure claims below, including freshness deadlines, conflicting availability, anchored
+> coverage, paper-derived holdout protection and terminal/progress handling. The already-declared
+> shared-policy, complete-resume and whole-memory gates remain software closeout requirements.
+> Follow [CODEX_PHASE_6_CLOSEOUT.md](../../prompts/CODEX_PHASE_6_CLOSEOUT.md). Original test results
+> have not been rewritten; actual archived model identity remains unverified.
+
 This report records software behavior observed with deterministic synthetic inputs, archived fake
 provider completions and fake notification transports. It is not live-market, model-quality,
 profitability or deployment evidence. No paid provider request, real notification, order or
