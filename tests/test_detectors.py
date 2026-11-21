@@ -17,7 +17,9 @@ def test_bullish_candidate_fresh_closed_candle(make_bars):
 
 def test_current_candle_never_used(make_bars):
     candles = make_bars(n=35, last_close=125)
-    assert create_candidate(EngineConfig("GOLD", "1m", 30), candles, now=candles[-1].open_time) is None
+    assert (
+        create_candidate(EngineConfig("GOLD", "1m", 30), candles, now=candles[-1].open_time) is None
+    )
 
 
 def test_stale_candle_not_used(make_bars):

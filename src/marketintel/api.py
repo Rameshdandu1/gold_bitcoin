@@ -1,6 +1,6 @@
 """Read-only localhost API. Add authenticated reverse proxy before public exposure."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 
@@ -17,7 +17,7 @@ app = FastAPI(title=settings.app_name, version="0.1.0")
 def health() -> dict:
     return {
         "service": "marketintel-api",
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "live_ingestion_enabled": settings.live_ingestion_enabled,
         "ai_enabled": settings.ai_enabled,
         "trading_enabled": False,

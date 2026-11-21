@@ -51,22 +51,33 @@ def test_matching_ai_can_confirm_after_gate(make_bars):
 def test_bad_snapshot_blocks(make_bars):
     c, now = sample_candidate(make_bars)
     assert c
-    assert decide(c, assessment(c), assessment(c, snapshot_id="wrong"), now=now).status == Status.WAIT
+    assert (
+        decide(c, assessment(c), assessment(c, snapshot_id="wrong"), now=now).status == Status.WAIT
+    )
 
 
 def test_model_reject_blocks(make_bars):
     c, now = sample_candidate(make_bars)
     assert c
-    assert decide(c, assessment(c), assessment(c, decision="REJECT"), now=now).status == Status.REJECTED
+    assert (
+        decide(c, assessment(c), assessment(c, decision="REJECT"), now=now).status
+        == Status.REJECTED
+    )
 
 
 def test_model_data_warning_blocks(make_bars):
     c, now = sample_candidate(make_bars)
     assert c
-    assert decide(c, assessment(c), assessment(c, data_warnings=["stale OI"]), now=now).status == Status.WAIT
+    assert (
+        decide(c, assessment(c), assessment(c, data_warnings=["stale OI"]), now=now).status
+        == Status.WAIT
+    )
 
 
 def test_expired_candidate_blocks(make_bars):
     c, now = sample_candidate(make_bars)
     assert c
-    assert decide(c, assessment(c), assessment(c), now=c.expires_at_utc + timedelta(seconds=1)).status == Status.WAIT
+    assert (
+        decide(c, assessment(c), assessment(c), now=c.expires_at_utc + timedelta(seconds=1)).status
+        == Status.WAIT
+    )

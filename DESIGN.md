@@ -27,8 +27,14 @@ flowchart TD
 ```
 
 ### Adapters
-- `DeltaREST`: `/v2/products` (symbol discovery), `/v2/history/candles` (historical closed candles). REST snapshots are rate-limited and are **not** historical raw trades.
-- `DeltaWS`: `wss://public-socket.india.delta.exchange`, `trades`, `ticker`, `ob_l2`, optional `ob_updates`, `candlestick_*`. Must detect partial messages, reconnect, sequence/checksum when using `ob_updates`. MVP WS stores a bounded trade window and latest book snapshot; exact raw-event persistence / book replay is a next milestone.
+- `DeltaREST`: `/v2/products` validates live/operational linear instruments, contract value, unit
+  currencies and tick size; `/v2/history/candles` supplies historical candles. Requests use bounded
+  retries for 429/5xx. REST candles are **not** historical raw trades.
+- `DeltaWS`: `wss://public-socket.india.delta.exchange`, documented compact `trades` and
+  `ob_updates`. The M1 collector preserves event/receive/publish times, deduplicates trades, stores a
+  bounded 5,000-trade working set, and durably journals every accepted event. Incremental books
+  require snapshot, contiguous sequence, CRC32, non-crossed sides and freshness; failure forces
+  reconnect/resubscribe and keeps the book invalid until a new snapshot.
 - `CoinGlass V4`: `https://open-api-v4.coinglass.com`, `CG-API-KEY`. Feature gating by actual subscription and supported exchanges/pairs. Start with supported-coins discovery and OI/funding; liquidation map endpoints are Professional entitlement, not assumed. Cache/rate limit; commercial use requires an eligible license.
 - `ReferenceGold`: optional XAU/USD, DXY, yields, economic calendar with provider attribution and time stamp. If missing, report unknown rather than silently treating XAUT as spot gold.
 
@@ -59,7 +65,10 @@ Target tiers and ATR projection filters are **provisional heuristics**, not lear
 ATR is a scale, not a directional prediction. Naive `ATR * sqrt(horizon / bar_minutes)` is a loose heuristic, not a forecast. Intraday sessions/news cause regime changes. Need walk-forward and purged time-based holdout, bootstrap CIs by day, fees/slippage, and target-before-stop labelling; ambiguous same-bar high/low = conservative loss or separate ambiguous bucket, not automatic win.
 
 ### Storage and messaging roadmap
-- **Starter**: SQLite WAL for audit/demo (single host), in-process scheduler/worker, capped rolling WS buffers. This is not a durable tick database.
+- **M1 single-host store**: SQLite WAL contains immutable candidate/audit records plus an append-only
+  raw public-event journal keyed by UTC-day logical partition. Database triggers block raw event
+  updates/deletes. Deterministic replay rebuilds closed candles and books. This is durable across
+  process restart but is not yet throughput-qualified as a high-frequency production tick database.
 - **Production target**: PostgreSQL + TimescaleDB (Windows native PostgreSQL or optional isolated Linux VM), durable raw events and candle tables; queue via PostgreSQL outbox or Redis in a supported Linux VM. Do NOT rely on discontinued native Windows Redis ports. Migrate only after measured feed throughput.
 - Retention policies: raw order-book updates may grow quickly; sample or compress according to license and analytical requirements. Backups: nightly database + off-host restore test.
 

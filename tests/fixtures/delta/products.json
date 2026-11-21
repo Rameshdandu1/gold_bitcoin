@@ -1,0 +1,62 @@
+[
+  {
+    "id": 27,
+    "symbol": "BTCUSD",
+    "description": "Bitcoin Perpetual futures",
+    "state": "live",
+    "trading_status": "operational",
+    "contract_type": "perpetual_futures",
+    "contract_value": "0.001",
+    "contract_unit_currency": "BTC",
+    "tick_size": "0.5",
+    "notional_type": "vanilla",
+    "underlying_asset": {"symbol": "BTC", "precision": 8},
+    "quoting_asset": {"symbol": "USD", "precision": 8},
+    "settling_asset": {"symbol": "USD", "precision": 8}
+  },
+  {
+    "id": 131253,
+    "symbol": "XAUTUSD",
+    "description": "XAUT Perpetual futures",
+    "state": "live",
+    "trading_status": "operational",
+    "contract_type": "perpetual_futures",
+    "contract_value": "0.001",
+    "contract_unit_currency": "XAUT",
+    "tick_size": "0.01",
+    "notional_type": "vanilla",
+    "underlying_asset": {"symbol": "XAUT", "precision": 8},
+    "quoting_asset": {"symbol": "USD", "precision": 8},
+    "settling_asset": {"symbol": "USD", "precision": 8}
+  },
+  {
+    "id": 123006,
+    "symbol": "PAXGUSD",
+    "description": "PAXG Perpetual futures",
+    "state": "live",
+    "trading_status": "operational",
+    "contract_type": "perpetual_futures",
+    "contract_value": "0.001",
+    "contract_unit_currency": "PAXG",
+    "tick_size": "0.01",
+    "notional_type": "vanilla",
+    "underlying_asset": {"symbol": "PAXG", "precision": 8},
+    "quoting_asset": {"symbol": "USD", "precision": 8},
+    "settling_asset": {"symbol": "USD", "precision": 8}
+  },
+  {
+    "id": 999001,
+    "symbol": "OLDXAUTUSD",
+    "description": "Delisted test fixture",
+    "state": "expired",
+    "trading_status": "disrupted_cancel_only",
+    "contract_type": "perpetual_futures",
+    "contract_value": "0.001",
+    "contract_unit_currency": "XAUT",
+    "tick_size": "0.01",
+    "notional_type": "vanilla",
+    "underlying_asset": {"symbol": "XAUT", "precision": 8},
+    "quoting_asset": {"symbol": "USD", "precision": 8},
+    "settling_asset": {"symbol": "USD", "precision": 8}
+  }
+]
