@@ -153,37 +153,72 @@ observation, live integration soaks and destination-host recovery remain separat
 
 ## Phase 6 — evidence integrity and complete workflow acceptance
 
-Detailed instructions: [CODEX_PHASE_6.md](../prompts/CODEX_PHASE_6.md).
+Governing instructions: [CODEX_PHASE_6.md](../prompts/CODEX_PHASE_6.md).
+Current task: [CODEX_PHASE_6_CLOSEOUT.md](../prompts/CODEX_PHASE_6_CLOSEOUT.md).
+The checked items below record implementation delivery and original executed tests; independent
+acceptance is qualified by the [Phase 6 review](audits/phase-6-independent-review.md).
 
-- [x] **6A:** advancing-clock alert authorization, cutoff-aligned evidence token, persisted
-  freshness deadline and typed zero-call quarantine for incomplete legacy request policy.
-- [x] **6B:** provider/quote availability and provenance retention, compatible evidence-mode
-  validation, contiguous pre-entry/post-entry quote and OHLC coverage, versioned Phase 6 outcomes.
+- [x] **6A delivered:** advancing-clock authorization, cutoff-aligned token and typed zero-call
+  legacy quarantine. The book freshness deadline still needs P6-01 correction.
+- [x] **6B delivered:** availability/provenance fields, compatible evidence modes and versioned
+  outcomes. Conflicting payload clocks and remaining pre-entry path defects are P6-02/P6-03.
 - [x] **6C reviewed counterexamples:** cadence evaluation during silence, availability-time provider
   decisions, source-state gates and a public connected paper command deriving later outcomes.
 - [x] **6D:** atomic paper-event/cursor commits, consumed-prefix identity, duplicate-first recovery,
   replacement/truncation/conflict and interrupted-transaction regressions.
-- [x] **6E:** central holdout projection for ordinary API/detail/summary/export inputs and durable
-  explicit final opening with `HOLDOUT_PROTECTED`/`HOLDOUT_OPENED` operator state.
+- [x] **6E ordinary research reads:** holdout projection and durable explicit final opening.
+  The paper-derived read path still exposes protected results (P6-04).
 - [x] **6F offline verification:** public synthetic Gold/BTC research and connected paper commands,
   backend/frontend checks, evidence-mode displays and native Windows instructions.
 - [ ] **Remaining 6C/6F acceptance:** one shared production-worker/historical application service
   for every admission/lifecycle/risk step, durable checkpoint/resume of complete derived workflow
-  state, longer bounded-memory soak, and destination Windows recovery evidence.
+  state, and measured bounded whole-workflow memory. Destination Windows recovery is a separate
+  operational gate below.
 
-These remaining gates do not reopen the demonstrated P5 defects, but they prevent a claim of full
-live-style parity or operational readiness. Licensed market data, genuine contemporaneous provider
-outputs and elapsed forward observation remain unavailable.
+### Phase 6 closeout — fixed remaining software scope
 
-## Phase 7 — derivatives/optional execution (separate approval; deferred)
+- [ ] **Closeout A:** P6-01 shared freshness deadline, P6-02 authoritative availability clocks,
+  P6-03 anchored quote-gap and incomplete pre-entry OHLC coverage corrections.
+- [ ] **Closeout B:** P6-04 holdout protection through paper derivation/reads and P6-05 legal
+  missing/expired-provider dispositions plus truthful bounded-progress/completion states.
+- [ ] **Closeout C:** finish the three shared-policy, derived-state resume and whole-memory gates
+  using actual public/live-style entry points and fresh-process interruption evidence.
+- [ ] **Closeout D:** publish exact red/green finding evidence, preserved controls, migrations,
+  public Gold/BTC verification, checksums and Windows CI in a closeout verification report.
+
+This closes existing requirements; it does not add a feature-development phase. The reviewed main
+`f66ac11f4d958a0075d7e22a5d841256e19b55df` passes 237 tests and the positive workflows, while the
+five reproduced finding groups and these three gates keep software acceptance open.
+
+## Next operational stage — controlled Windows and live integration validation
+
+- [ ] Validate actual destination Windows startup, service identity, paths/ACLs, reboot and restore.
+- [ ] Verify bounded Delta collection/discovery, source freshness, reconciliation and reconnect.
+- [ ] Verify provided CoinGlass entitlements/coverage and configured model accounts with recorded
+  actual model/request/usage evidence; preserve missing context as unavailable.
+- [ ] Verify an authorized notification destination and controlled failure/recovery behavior.
+
+Prepare these checks during closeout. Run external steps only with available prerequisites and
+existing or newly supplied authorization; leave absent prerequisites explicit. No orders.
+
+## Next evidence stage — prospective paper observation
+
+- [ ] Collect genuine contemporaneous decisions and later outcomes across sufficient elapsed time,
+  retaining outages, abstentions, latency, costs and per-asset/horizon denominators.
+- [ ] Compare rules/GPT/Claude/dual on a frozen common-opportunity policy with declared sample,
+  coverage and uncertainty criteria. Report insufficient evidence honestly.
+
+Duration alone does not establish an edge. Synthetic and retrospective records remain separate.
+
+## Future extensions — derivatives/optional execution (separate approval; deferred)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.
 20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's current scope.
 
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
-- M3: implemented with a passing fixture baseline; the reviewed dispatch/upgrade findings are
-  corrected in 6A while complete shared-policy parity remains open. Live provider/model entitlement,
+- M3: implemented with a passing fixture baseline; legacy upgrade and original clock cases are
+  corrected, while authorization freshness and full shared policy remain in closeout. Live provider/model entitlement,
   paid-call behavior, Slack delivery,
   Windows installation and extended market soak remain separate operator acceptance gates.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
