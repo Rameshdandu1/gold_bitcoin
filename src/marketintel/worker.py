@@ -14,6 +14,7 @@ from marketintel.consensus import decide
 from marketintel.delta import DeltaPublicStream, DeltaREST, OrderBookAssembler
 from marketintel.detectors import BAR_MINUTES, create_candidate
 from marketintel.models import Instrument, SignalState, Status
+from marketintel.orchestration import frozen_provider_config
 from marketintel.quantitative import (
     QUANT_ENGINE_CONFIGS,
     QuantEngineConfig,
@@ -402,16 +403,7 @@ async def poll_closed_candles(
                                     material_digest=material_proposal_digest(
                                         result.candidate, result.snapshot
                                     ),
-                                    provider_config={
-                                        "openai_model": settings.openai_model,
-                                        "anthropic_model": settings.anthropic_model,
-                                        "max_output_tokens": settings.ai_max_output_tokens,
-                                        "prompt_version": analysis.envelope.prompt_version,
-                                        "schema_version": analysis.envelope.schema_version,
-                                        "risk_policy_version": (
-                                            analysis.envelope.risk_policy_version
-                                        ),
-                                    },
+                                    provider_config=frozen_provider_config(settings, analysis),
                                     deadline_at=deadline,
                                     now=decision_now,
                                 )

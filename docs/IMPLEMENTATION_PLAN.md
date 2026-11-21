@@ -119,48 +119,43 @@ Unavailable historical trades/books, licensed context and contemporaneous AI out
 unavailable; no synthetic performance may be presented as empirical evidence.
 
 **Independent Phase 4 gate (2026-11-21):** PR #6 delivered corrections and research components, with
-206 passing tests. The acceptance boxes above remain open: the public replay does not run the six
-engines, evaluation imports outcomes, paper processing lacks the full market-event loop, and
-independent probes reproduce the failures in [the review](audits/phase-4-independent-review.md).
-The historical implementation report remains evidence of its executed checks, not closure of these
-later findings. Real data, contemporary model assessments and forward observation remain separate.
+206 passing tests. The [independent review](audits/phase-4-independent-review.md) identified the
+integrated replay, outcome, paper chronology, dispatch and recovery gaps assigned to Phase 5. The
+historical implementation report remains evidence of its executed checks, not closure of those later
+findings. Real data, contemporary model assessments and forward observation remain separate.
 
-## Phase 5 — research completion, correctness and operational validation
+## Phase 5 — research completion and operational validation
 
 Detailed instructions: [CODEX_PHASE_5.md](../prompts/CODEX_PHASE_5.md).
 
-- [ ] **5A:** shared complete current-risk policy and fenced alert dispatch; no paid dispatch for
-  already ineligible work; complete frozen request configuration; terminal expired-job recovery.
-- [ ] **5B:** production-engine replay through a shared application path; validated dataset/config
-  identities and immutable research records; bounded output/state and atomic checkpoint recovery.
-- [ ] **5C:** real per-arm readiness/entry, pre-entry invalidation, complete path/partial-bar policy,
-  truthful outcome contracts and hand-checkable costs wired into public evaluation.
-- [ ] **5D:** unique-opportunity/revision policy, operational filter comparisons including known
-  abstentions, past-only training, protected holdout and actual partition-aware reports.
-- [ ] **5E:** paper events persisted before eligible entry; state/identity/chronology invariants;
-  market-event progression, source-generation cursors and restart/gap handling.
-- [ ] **5F:** authenticated experiment/engine/arm/paper views, authoritative complete exports,
-  consistent CLI/API/UI evidence, native Windows instructions and honest readiness gates.
+- [x] **5A:** shared current-risk delivery policy, transaction-fenced dispatch authorization,
+  zero-call terminal/configuration preflight and durable expired-result dispositions.
+- [x] **5B:** canonical dataset/config identities, prefix-bound bounded replay, immutable journal and
+  shared production-detector workflow for Gold/BTC across all six engines.
+- [x] **5C:** public quote-path evaluation with readiness/latency once, pre-entry invalidation,
+  expiry/path uncertainty and verified quote-side contract/cost calculations.
+- [x] **5D:** unique opportunity/revision selection, past-only purged folds, frozen holdout policy,
+  known-abstention operational comparisons and explicit final-holdout access.
+- [x] **5E:** source-bound prospective paper event loop with write-before-entry/outcome chronology,
+  legal arm states, restart idempotence, truncation and generation checks.
+- [x] **5F:** authenticated experiment/engine/opportunity/paper views, authoritative checksummed
+  exports, Gold/BTC public fixture workflows and native Windows instructions.
 
-Acceptance requires two complete public-command hypothetical workflows, one Gold and one BTC,
-plus a six-engine replay/live-style parity matrix. Helper tests alone cannot close the milestone.
-Keep all external operations default off; software verification is separate from weeks of empirical
-observation. Do not claim accuracy, profitability or destination deployment from fixture results.
+These checkboxes are software acceptance on explicitly synthetic streams. Adequate licensed market
+history, genuine contemporary provider completions, extended prospective observation, live
+integration soaks and destination-host recovery remain empirical/operational gates.
 
-## Deferred follow-up — derivatives and optional execution
-
-The earlier roadmap called this Phase 5. It is deferred until the current research acceptance gaps
-are closed. Execution continues to require a separate design, review and explicit authorization.
-
+## Phase 6 — derivatives/optional execution (separate approval; deferred)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.
-20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's initial scope.
+20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's current scope.
 
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
-- M3: original Phase 3 reproductions are corrected; the remaining dispatch/configuration/recovery
-  findings are assigned to 5A. Live provider access, delivery and Windows operation remain separate.
-- M4: incomplete pending integrated replay, valid outcomes/partitions/comparisons and prospective
-  paper processing. Empirical net-of-cost results require adequate real unseen data.
-- M5: public research workflows and recovery gates verified; evidence states distinguish software,
-  data/model coverage, forward observation and deployment. No automatic transition to trading.
+- M3: implemented with a passing fixture baseline; independent review acceptance remains blocked
+  by the findings assigned to 4A. Live provider/model entitlement, paid-call behavior, Slack delivery,
+  Windows installation and extended market soak remain separate operator acceptance gates.
+- M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
+- M5 software: the six-engine workflow, outcome evaluator, partitions, paper chronology and operator
+  surfaces agree on immutable hypothetical evidence. M5 empirical readiness remains incomplete
+  until real licensed and prospective evidence exists.

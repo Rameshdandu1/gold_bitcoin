@@ -1,35 +1,62 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: Design v0.4 / research MVP. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: Design v0.5 / research-completion MVP. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
-## Research target and current implementation
+## Phase 5 evidence architecture
 
-Historical observations carry exchange time and factual `available_at_utc`. The current Phase 4
-timeline orders observations by availability, persistence sequence, kind and event ID. It records
-visibility and a rolling hash but does not run the production engines. Manifests include file
-checksums and provenance; canonical dataset/config identity and portable checkpoint integrity still
-need the corrections in the independent review.
+The public `run-workflow` command validates the canonical dataset manifest, externally sorts input
+by factual availability, and sends normalized trades, candles, book generations, instruments and
+recorded provider completions through `SharedResearchEngine`. That service retains at most 5,000
+trades per symbol and 2,000 candles per symbol/resolution and invokes the production
+`detect_signal` function for all six engines. It never has a provider, notification, account or
+order transport.
 
-`research.sqlite3` stores experiment inputs, replay points, imported opportunity records and
-reports. `paper.sqlite3` stores local decision imports, outcome rows, cursors and gaps. Insertion
-order alone does not establish prospective entry/outcome chronology. Both reject an explicitly
-equal production database path and have no production review/outbox integration.
+Candidates, four-arm decisions and their exact target/configuration identities are immutable
+records. Decisions are stored before the evaluator reads the journal-backed future quote path.
+Executable outcomes reuse bid/ask, tick, multiplier, fee, slippage, funding and gap policies.
+Ordinary evaluation selects one revision per opportunity and excludes label intervals that enter
+the frozen holdout. Protected holdout access is a separate recorded command.
 
-Required semantics: each arm enters after factual readiness and one configured execution delay;
-longs enter ask/exit bid and shorts enter bid/exit ask. Costs/units must be explicit, path coverage
-must be complete or uncertain, and chronological development/test/holdout policy must govern actual
-reports. The current helpers contain timing, coverage, fold and aggregation defects; their presence
-does not establish these guarantees.
+Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
+hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,
+seed and variant policy. Checkpoints bind both hashes and validate the consumed input prefix while
+retaining only the most recent 128 diagnostic event IDs. Conflicting writes fail instead of
+overwriting scientific history.
 
-**Independent review:** the original Phase 3 examples have verified corrections and the Phase 4
-baseline passes 206 tests. The [independent Phase 4 review](docs/audits/phase-4-independent-review.md)
-documents remaining correctness defects and incomplete public workflows. Follow
-[CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md) for shared engine replay, valid outcomes/partitions,
-prospective paper processing and current dispatch/recovery. Passing fixtures do not establish
-live provider readiness, empirical performance or destination Windows deployment.
+The paper ledger binds candidate, revision, arm, target, configuration, source identity/generation,
+decision persistence time and eligible-entry time. Prospective entries/outcomes must occur after
+the decision write and be factually available before recording. Historical import remains a
+distinct evidence mode. The worker advances a source-bound cursor after each idempotent event and
+detects replacement or truncation.
+
+## Phase 4 foundation
+
+Historical observations carry exchange time and factual `available_at_utc`; replay orders by
+availability time, persistence sequence, event-kind priority and immutable event ID. Dataset
+manifests pin file hashes/counts, instruments, source coverage/gaps, code/rule versions, provenance
+and data mode. A rolling hash and atomic checkpoint make resume deterministic without revealing
+corrections before their recorded arrival.
+
+`research.sqlite3` stores experiment inputs, replay points, common-opportunity arm records and
+reports. `paper.sqlite3` stores prospective decisions before outcomes, cursors and gaps. Both reject
+the production database path and never use production review/outbox tables.
+
+Every arm enters at its actual decision-ready time. Long entries use ask and exits bid; shorts use
+bid and exits ask. Tick rounding/slippage are adverse, fees cover both sides, instrument contract
+units are versioned, and required funding fails closed. Outcomes preserve `NO_ENTRY`, target, stop,
+time exit, `AMBIGUOUS` and `INCOMPLETE`. Folds keep all opportunity revisions/arms together and
+purge overlapping label-information intervals with a time embargo.
+
+**Independent review:** the [independent Phase 4 review](docs/audits/phase-4-independent-review.md)
+identified the correctness and workflow gaps assigned to Phase 5. Those findings now have the
+regression coverage and implementation evidence recorded in
+[phase-5-verification.md](docs/audits/phase-5-verification.md). Architectural requirements remain
+distinct from empirical acceptance: live providers, licensed data, prospective duration and
+destination deployment are not proven by fixtures. Passing fixtures are not evidence of live
+provider readiness or strategy performance.
 
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.

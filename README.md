@@ -1,20 +1,27 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
-## Research implementation and review status
+## Phase 5 research-completion workflow
 
-Phase 4 adds an availability timeline, outcome/statistics helpers, isolated research stores and a
-paper decision importer. The [independent Phase 4 review](docs/audits/phase-4-independent-review.md)
-finds that the public replay/evaluation/paper commands do not yet form the complete strategy workflow,
-and reproduces outcome, time-validation, comparison and delivery defects. Follow
-[CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md) to complete and validate that workflow.
-
-The research path uses separate SQLite files and has no provider, notification, account or order
-client. The committed two-record dataset is a synthetic software fixture; it establishes no
-strategy performance. Genuine historical AI assessments remain `UNAVAILABLE`.
+Phase 5 connects factual-availability replay to the production six-engine detector, frozen four-arm
+decisions, quote-side outcome evaluation, protected time partitions, authoritative exports and a
+prospective paper event ledger. Research and paper state remain isolated from production review,
+budget and notification state. The included generator creates explicitly synthetic Gold/BTC
+software-verification streams; it does not establish strategy accuracy or profitability.
 
 ```powershell
-.\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest tests\fixtures\research\manifest.json
-.\.venv\Scripts\python.exe -m marketintel.research replay --manifest tests\fixtures\research\manifest.json --config tests\fixtures\research\experiment.json --database data\research.sqlite3 --checkpoint data\fixture-checkpoint.json
+.\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures
+.\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest data\phase5-fixtures\gold-manifest.json
+.\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3
+.\.venv\Scripts\python.exe -m marketintel.research evaluate --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
+.\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
+```
+
+Repeat `run-workflow`, `evaluate` and `report` with the generated BTC manifest/config and
+`phase5-btc-workflow-v1`. Acceptance tests run all six real detectors; fixture provider completions
+remain labelled `SYNTHETIC_FIXTURE`. Missing genuine assessments stay `UNAVAILABLE`. The
+prospective worker is separately bounded and disabled:
+
+```powershell
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
 ```
 
@@ -25,14 +32,13 @@ strategy performance. Genuine historical AI assessments remain `UNAVAILABLE`.
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-21):** Phase 4 is merged and its **206-test baseline passes**. The original
-Phase 3 counterexamples have verified corrections, but independent acceptance remains open. The
-review identifies incomplete strategy replay/paper integration, unsupported outcome labels,
-future/holdout leakage, comparison/provenance gaps, and remaining dispatch/recovery defects.
-The next milestone is Phase 5 research completion and validation. These documents are instructions,
-not completed fixes. Derivatives/optional execution is deferred. Live provider entitlement, adequate
-licensed data, contemporary AI assessments, real delivery, weeks of paper observation, destination
-Windows deployment and strategy performance remain unverified.
+**Review status (2026-11-21):** Phase 5 software acceptance uses complete hypothetical Gold/BTC
+streams and negative controls. P4-01 through P4-12 are addressed by regressions or explicitly
+recorded limitations from the
+[independent Phase 4 review](docs/audits/phase-4-independent-review.md). Live provider/model
+entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
+prospective observation duration, destination Windows Server recovery, market-data soak and
+empirical strategy performance remain unverified.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,
@@ -184,7 +190,7 @@ No `DELTA_API_KEY` is needed for public market data; do not give trading permiss
   use a restricted HTTPS reverse proxy/VPN for remote access. See the Windows runbook.
 
 Model agreement and passing software tests are not accuracy, probability, profitability, or trading
-advice. Phase 5 must complete and validate time-ordered evaluation and prospective paper research.
+advice. Derivatives and execution remain deferred and are absent from this repository.
 
 See the [initial codebase audit](docs/audits/initial-codebase-audit.md) for the measured baseline,
 live discovery timestamp and remaining unverified operational work. Architecture and operating

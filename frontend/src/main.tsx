@@ -28,10 +28,19 @@ type SourceHealth = { source: string; state: string; heartbeat_at_utc: string; l
 type Health = { live_ingestion_enabled: boolean; ai_enabled: boolean; alerts_enabled: boolean; trading_enabled: boolean; timestamp_utc: string; services: {service:string;updated_at:string;state:string;detail:string}[]; source_health: SourceHealth[]; warning: string }
 type ResearchSummary = {
   status: 'NOT_STARTED' | 'INSUFFICIENT_DATA' | 'EXPLORATORY'; experiment_count: number; report_count: number; opportunity_count: number;
-  latest_experiment: {experiment_id: string; created_at_utc: string} | null; warning: string;
-  data_mode: string; external_calls_performed: number; real_notifications_sent: number;
-  paper: {status: 'NOT_STARTED' | 'EXPLORATORY'; decisions: number; outcomes: number; explicit_gaps: number; warning: string}
+  latest_experiment: {experiment_id: string; created_at_utc: string; data_mode: string} | null; warning: string;
+  selected_experiment_id: string | null; data_mode: string; external_calls_performed: number | null; real_notifications_sent: number | null; orders_placed: number | null; counter_scope: string;
+  paper: {status: 'NOT_STARTED' | 'EXPLORATORY'; decisions: number; outcomes: number; explicit_gaps: number; evidence_modes: Record<string, number>; warning: string}
 }
+type ResearchExperiment = { experiment_id: string; created_at_utc: string; dataset_id: string; dataset_hash: string; config_hash: string; data_mode: string }
+type EngineResearch = { engine: string; state: string; evaluations: number; candidates: number }
+type ResearchDetail = {
+  experiment_id: string; config_hash: string; manifest: {dataset_id: string; data_mode: string; provenance: string; coverage: unknown[]};
+  counts: {candidates: number; opportunities: number; outcomes: number; decisions: number}; engine_matrix: EngineResearch[];
+  reports: {name: string; report: {classification?: string; partition?: string}}[];
+  action_counts: {scope: string; external_calls: number; real_notifications: number; orders: number} | null
+}
+type PaperTransition = {event_id: string; opportunity_id: string; arm: string; state: string; occurred_at_utc: string}
 
 function formatTime(utc: string) { return new Date(utc).toLocaleString('en-IN', {timeZone:'Asia/Kolkata',hour12:true}) + ' IST' }
 function number(value: number) {return value.toLocaleString('en-US', {maximumFractionDigits:2})}
@@ -46,6 +55,10 @@ function App() {
   const [entries, setEntries] = useState<Entry[]>([])
   const [health, setHealth] = useState<Health | null>(null)
   const [research, setResearch] = useState<ResearchSummary | null>(null)
+  const [researchExperiments, setResearchExperiments] = useState<ResearchExperiment[]>([])
+  const [researchSelected, setResearchSelected] = useState<string | null>(null)
+  const [researchDetail, setResearchDetail] = useState<ResearchDetail | null>(null)
+  const [paperTransitions, setPaperTransitions] = useState<PaperTransition[]>([])
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
 
@@ -53,11 +66,11 @@ function App() {
     let alive = true
     const refresh = async () => {
       try {
-        const responses = await Promise.all(['/api/health', '/api/engines', '/api/candidates', '/api/research/summary'].map(u => fetch(u, {cache: 'no-store'})))
+        const responses = await Promise.all(['/api/health', '/api/engines', '/api/candidates', '/api/research/summary', '/api/research/experiments', '/api/research/paper/transitions?limit=20'].map(u => fetch(u, {cache: 'no-store'})))
         if (responses.some(r => !r.ok)) throw new Error('Backend returned an error; see API logs')
-        const [h, e, c, r] = await Promise.all(responses.map(response=>response.json())) as [Health, Engine[], Entry[], ResearchSummary]
+        const [h, e, c, r, experiments, transitions] = await Promise.all(responses.map(response=>response.json())) as [Health, Engine[], Entry[], ResearchSummary, ResearchExperiment[], PaperTransition[]]
         if (!alive) return
-        setHealth(h); setEngines(e); setEntries(c); setResearch(r); setError(null)
+        setHealth(h); setEngines(e); setEntries(c); setResearch(r); setResearchExperiments(experiments); setPaperTransitions(transitions); setResearchSelected(current => current ?? r.selected_experiment_id); setError(null)
       } catch (err) {
         if (alive) setError(err instanceof Error ? err.message : 'Backend unavailable')
       }
@@ -66,6 +79,15 @@ function App() {
     const timer = window.setInterval(() => void refresh(), 15000)
     return () => { alive = false; window.clearInterval(timer) }
   }, [])
+  useEffect(() => {
+    let alive = true
+    if (!researchSelected) { setResearchDetail(null); return () => { alive = false } }
+    void fetch(`/api/research/experiments/${encodeURIComponent(researchSelected)}`, {cache: 'no-store'})
+      .then(response => { if (!response.ok) throw new Error('Selected research experiment is unavailable'); return response.json() as Promise<ResearchDetail> })
+      .then(detail => { if (alive) { setResearchDetail(detail); setError(null) } })
+      .catch(err => { if (alive) { setResearchDetail(null); setError(err instanceof Error ? err.message : 'Research detail unavailable') } })
+    return () => { alive = false }
+  }, [researchSelected])
   const filtered = entries.filter(e=>e.candidate.asset === asset)
   const active = filtered.find(e => e.candidate.candidate_id === selected) ?? filtered[0]
   const gpt = latestAttempt(active, 'OPENAI')
@@ -79,7 +101,7 @@ function App() {
       <button className={'nav nav-button '+(view==='market'?'active':'')} onClick={()=>setView('market')}>▤ &nbsp; Market Overview</button>
       <div className="nav disabled">⌁ &nbsp; Order Flow <small>PLANNED</small></div>
       <div className="nav disabled">◉ &nbsp; AI Consensus <small>IN OVERVIEW</small></div>
-      <button className={'nav nav-button '+(view==='research'?'active':'')} onClick={()=>setView('research')}>◷ &nbsp; Research <small>PHASE 4</small></button>
+      <button className={'nav nav-button '+(view==='research'?'active':'')} onClick={()=>setView('research')}>◷ &nbsp; Research <small>PHASE 5</small></button>
       <div className="nav disabled">⚙ &nbsp; Settings <small>PLANNED</small></div>
       <div className="sidebar-bottom"><span className="status-dot"/> Research mode<br/><small>No order execution</small></div>
     </aside>
@@ -94,7 +116,10 @@ function App() {
             <article className="engine"><span className="small-tag">PROSPECTIVE PAPER</span><h3>{research.paper.status}</h3><div className="metric">{research.paper.decisions}</div><p className="muted">Pre-outcome decisions · {research.paper.outcomes} outcomes</p></article>
             <article className="engine"><span className="small-tag">DATA CLASSIFICATION</span><h3>{research.data_mode}</h3><div className="metric">{research.report_count}</div><p className="muted">Generated reports · {research.paper.explicit_gaps} explicit gaps</p></article>
           </div>
-          <div className="panel research-notice"><strong>Evidence limitations</strong><p>{research.warning}</p><p>{research.paper.warning}</p><p>External calls: {research.external_calls_performed} · Real notifications: {research.real_notifications_sent} · Order execution: unsupported</p></div>
+          <div className="panel research-selector"><label htmlFor="research-experiment">Selected experiment</label><select id="research-experiment" value={researchSelected ?? ''} onChange={event=>setResearchSelected(event.target.value || null)}><option value="">No dataset selected</option>{researchExperiments.map(experiment=><option key={experiment.experiment_id} value={experiment.experiment_id}>{experiment.experiment_id} · {experiment.data_mode}</option>)}</select>{researchDetail ? <div className="research-meta"><span>Dataset <b>{researchDetail.manifest.dataset_id}</b></span><span>Config <b>{researchDetail.config_hash.slice(0,12)}</b></span><span>Opportunities <b>{researchDetail.counts.opportunities}</b></span><span>Outcomes <b>{researchDetail.counts.outcomes}</b></span></div> : <p className="muted">Select a versioned experiment to view measured records.</p>}</div>
+          {researchDetail && <div className="research-grid"><div className="panel"><div className="section-head"><h2>Six-engine evidence</h2><small>{researchDetail.manifest.data_mode}</small></div><div className="research-table">{researchDetail.engine_matrix.map(row=><div key={row.engine}><strong>{row.engine}</strong><span>{row.state}</span><span>{row.candidates} candidates / {row.evaluations} evaluations</span></div>)}</div></div><div className="panel"><div className="section-head"><h2>Partitions & reports</h2><small>{researchDetail.reports.length} immutable versions</small></div><div className="research-table">{researchDetail.reports.length ? researchDetail.reports.map(row=><div key={row.name}><strong>{row.name}</strong><span>{row.report.partition ?? 'UNPARTITIONED'}</span><span>{row.report.classification ?? 'INSUFFICIENT_DATA'}</span></div>) : <p className="muted">No report has been generated for this experiment.</p>}</div></div></div>}
+          <div className="panel"><div className="section-head"><h2>Paper transitions</h2><small>Bounded latest 20</small></div><div className="research-table">{paperTransitions.length ? paperTransitions.map(row=><div key={row.event_id}><strong>{row.arm}</strong><span>{row.state}</span><span>{formatTime(row.occurred_at_utc)}</span></div>) : <p className="muted">No prospective paper transitions recorded.</p>}</div></div>
+          <div className="panel research-notice"><strong>Evidence limitations</strong><p>{research.warning}</p><p>{research.paper.warning}</p><p>Counter scope: {research.counter_scope} · External calls: {research.external_calls_performed ?? 'not measured'} · Real notifications: {research.real_notifications_sent ?? 'not measured'} · Orders: {research.orders_placed ?? 'unsupported'}</p></div>
         </>}
       </section> : <>
       <div className="toolbar"><div className="tabs"><button className={asset==='GOLD'?'chosen':''} onClick={()=>{setAsset('GOLD');setSelected(null)}}>◎ Gold <span>XAUT / listed contract</span></button><button className={asset==='BTC'?'chosen':''} onClick={()=>{setAsset('BTC');setSelected(null)}}>₿ Bitcoin <span>BTCUSD</span></button></div><div className="status-right"><span className={health?.live_ingestion_enabled?'dot-green':'dot-gray'}/> {health?.live_ingestion_enabled?'INGESTION ENABLED':'INGESTION OFF'} <span className="separator">|</span> GPT + Claude: {health?.ai_enabled?'ENABLED':'OFF'}</div></div>

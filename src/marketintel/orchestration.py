@@ -27,6 +27,40 @@ TRANSIENT_PROVIDER_STATUSES = {
 }
 
 
+def frozen_provider_config(settings: Settings, analysis: CanonicalAnalysis) -> dict:
+    """Complete immutable provider/request policy stored in the review-run identity."""
+    return {
+        "request_config_version": "phase5-v1",
+        "openai_model": settings.openai_model,
+        "anthropic_model": settings.anthropic_model,
+        "max_input_tokens": settings.ai_max_input_tokens,
+        "max_output_tokens": settings.ai_max_output_tokens,
+        "attempt_timeout_seconds": settings.ai_attempt_timeout_seconds,
+        "maximum_attempts_per_provider": settings.ai_max_attempts_per_provider,
+        "openai_input_microusd_per_million_tokens": (
+            settings.openai_input_microusd_per_million_tokens
+        ),
+        "openai_output_microusd_per_million_tokens": (
+            settings.openai_output_microusd_per_million_tokens
+        ),
+        "anthropic_input_microusd_per_million_tokens": (
+            settings.anthropic_input_microusd_per_million_tokens
+        ),
+        "anthropic_output_microusd_per_million_tokens": (
+            settings.anthropic_output_microusd_per_million_tokens
+        ),
+        "prompt_version": analysis.envelope.prompt_version,
+        "schema_version": analysis.envelope.schema_version,
+        "response_schema": "AnalystAssessmentV2",
+        "risk_policy_version": analysis.envelope.risk_policy_version,
+        "fee_bps": settings.risk_fee_bps,
+        "slippage_bps": settings.risk_slippage_bps,
+        "maximum_entry_drift_bps": settings.risk_maximum_entry_drift_bps,
+        "maximum_spread_bps": settings.risk_maximum_spread_bps,
+        "minimum_net_reward_risk": settings.risk_minimum_net_reward_risk,
+    }
+
+
 class ReviewOrchestrator:
     def __init__(
         self,
@@ -42,6 +76,64 @@ class ReviewOrchestrator:
         self.gpt = gpt
         self.claude = claude
         self.clock = clock or (lambda: datetime.now(UTC))
+
+    def _configuration_failure(self, queued: dict, analysis: CanonicalAnalysis) -> str | None:
+        expected = frozen_provider_config(self.settings, analysis)
+        if queued.get("request_config_version") == "phase5-v1":
+            if queued != expected:
+                return "QUEUED_PROVIDER_CONFIGURATION_MISMATCH"
+        elif any(
+            key in queued and queued[key] != expected[key]
+            for key in expected
+            if key != "request_config_version"
+        ):
+            return "QUEUED_PROVIDER_CONFIGURATION_MISMATCH"
+        return None
+
+    def _preflight_failure(
+        self,
+        analysis: CanonicalAnalysis,
+        *,
+        claim: dict,
+        deadline_at: datetime,
+        now: datetime,
+    ) -> str | None:
+        if now >= deadline_at:
+            return "TOTAL_DEADLINE_EXCEEDED"
+        job = self.store.review_job(claim["job_id"])
+        if (
+            job is None
+            or job["lease_owner"] != claim["owner"]
+            or job["lease_generation"] != claim["generation"]
+            or job["status"] not in {"CLAIMED", "DISPATCHED"}
+            or job["lease_expires_at_utc"] is None
+            or datetime.fromisoformat(job["lease_expires_at_utc"]) < now
+        ):
+            return "REVIEW_LEASE_LOST"
+        active = self.store.active_candidate_revision(analysis.envelope.candidate_id)
+        if active is None or active["revision_id"] != analysis.envelope.candidate_revision_id:
+            return "ACTIVE_REVISION_CHANGED"
+        lifecycle = self.store.candidate_lifecycle(analysis.envelope.candidate_id)
+        if not lifecycle or lifecycle[-1].to_state.value != "CANDIDATE":
+            return "CANDIDATE_LIFECYCLE_TERMINAL"
+        if now >= analysis.envelope.expires_at_utc:
+            return "CANDIDATE_EXPIRED"
+        try:
+            # Local import avoids a module cycle while keeping the production eligibility
+            # builder authoritative for source freshness and evidence identity.
+            from marketintel.review_worker import current_eligibility
+
+            current = current_eligibility(self.store, self.settings, analysis, now=now)
+        except ValueError:
+            return "ELIGIBILITY_EVIDENCE_UNAVAILABLE"
+        if not (
+            current.discovery_current
+            and current.reconciliation_current
+            and current.trade_stream_current
+            and current.book_current
+        ):
+            return "REQUIRED_MARKET_SOURCES_UNAVAILABLE"
+        return None
 
     def _rates(self, provider: str) -> tuple[int, int] | None:
         values = (
@@ -89,6 +181,7 @@ class ReviewOrchestrator:
         run_id: str,
         claim: dict,
         deadline_at: datetime,
+        strict_preflight: bool,
     ) -> ProviderResult:
         if not self.settings.ai_enabled or not adapter.api_key or not adapter.requested_model:
             result = await adapter.review(analysis, deadline_at=deadline_at, attempt_number=1)
@@ -133,12 +226,26 @@ class ReviewOrchestrator:
         last: ProviderResult | None = None
         for attempt in range(1, self.settings.ai_max_attempts_per_provider + 1):
             now = self.clock()
-            if now >= deadline_at:
+            preflight_failure = (
+                self._preflight_failure(
+                    analysis,
+                    claim=claim,
+                    deadline_at=deadline_at,
+                    now=now,
+                )
+                if strict_preflight
+                else ("TOTAL_DEADLINE_EXCEEDED" if now >= deadline_at else None)
+            )
+            if preflight_failure is not None:
                 result = adapter._result(
-                    status="DEADLINE_EXCEEDED",
+                    status=(
+                        "DEADLINE_EXCEEDED"
+                        if preflight_failure == "TOTAL_DEADLINE_EXCEEDED"
+                        else "NOT_READY"
+                    ),
                     started=now,
                     attempt_number=attempt,
-                    failure_code="TOTAL_DEADLINE_EXCEEDED",
+                    failure_code=preflight_failure,
                 )
                 self.store.save_provider_result(
                     run_id=run_id,
@@ -223,13 +330,10 @@ class ReviewOrchestrator:
         if (now - created_at).total_seconds() > self.settings.ai_queue_max_age_seconds:
             deadline_at = now
 
-        configuration_failure: str | None = None
+        configuration_failure: str | None = self._configuration_failure(
+            run["provider_config"], analysis
+        )
         queued_models = run["provider_config"]
-        if (
-            queued_models.get("openai_model") != self.gpt.requested_model
-            or queued_models.get("anthropic_model") != self.claude.requested_model
-        ):
-            configuration_failure = "QUEUED_PROVIDER_CONFIGURATION_MISMATCH"
         if self.settings.ai_enabled:
             if configuration_failure is not None:
                 pass
@@ -246,7 +350,24 @@ class ReviewOrchestrator:
                 configuration_failure = "MODEL_PRICE_CONFIGURATION_MISSING"
             elif self.settings.ai_total_cost_limit_microusd_per_day <= 0:
                 configuration_failure = "SPEND_LIMIT_NOT_CONFIGURED"
+        if (
+            configuration_failure is None
+            and queued_models.get("request_config_version") == "phase5-v1"
+        ):
+            configuration_failure = self._preflight_failure(
+                analysis,
+                claim=claim,
+                deadline_at=deadline_at,
+                now=now,
+            )
         if configuration_failure is not None:
+            self.store.record_review_disposition(
+                run_id=run_id,
+                job_id=claim["job_id"],
+                code=configuration_failure,
+                now=self.clock(),
+                detail={"provider_calls": 0},
+            )
             results = tuple(
                 self._not_ready(adapter, attempt=1, code=configuration_failure)
                 for adapter in (self.gpt, self.claude)
@@ -295,6 +416,7 @@ class ReviewOrchestrator:
                 run_id=run_id,
                 claim=claim,
                 deadline_at=deadline_at,
+                strict_preflight=(queued_models.get("request_config_version") == "phase5-v1"),
             ),
             self._run_provider(
                 self.claude,
@@ -302,6 +424,7 @@ class ReviewOrchestrator:
                 run_id=run_id,
                 claim=claim,
                 deadline_at=deadline_at,
+                strict_preflight=(queued_models.get("request_config_version") == "phase5-v1"),
             ),
         )
         if not self.store.mark_review_results_ready(

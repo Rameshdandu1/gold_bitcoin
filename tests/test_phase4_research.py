@@ -408,17 +408,35 @@ def test_paper_ledger_requires_immutable_prior_decision_and_resumes_cursor(tmp_p
     ledger = PaperLedger(tmp_path / "paper.sqlite3")
     approved = decision()
     assert ledger.record_decision(
-        "opp-1", "rev-1", approved, recorded_at=NOW + timedelta(seconds=20)
+        "opp-1",
+        "rev-1",
+        approved,
+        candidate=candidate(),
+        config_hash="a" * 64,
+        target_index=1,
+        source_identity="phase4-fixture-v1",
+        recorded_at=NOW + timedelta(seconds=10),
     )
     assert not ledger.record_decision(
-        "opp-1", "rev-1", approved, recorded_at=NOW + timedelta(seconds=21)
+        "opp-1",
+        "rev-1",
+        approved,
+        candidate=candidate(),
+        config_hash="a" * 64,
+        target_index=1,
+        source_identity="phase4-fixture-v1",
+        recorded_at=NOW + timedelta(seconds=10),
     )
     with pytest.raises(ValueError, match="immutable"):
         ledger.record_decision(
             "opp-1",
             "rev-1",
             approved.model_copy(update={"state": "REJECTED"}),
-            recorded_at=NOW + timedelta(seconds=21),
+            candidate=candidate(),
+            config_hash="a" * 64,
+            target_index=1,
+            source_identity="phase4-fixture-v1",
+            recorded_at=NOW + timedelta(seconds=10),
         )
     result = evaluate_quotes(
         candidate(),
@@ -461,4 +479,5 @@ def test_authenticated_research_summary_has_honest_empty_states(tmp_path) -> Non
     assert response.status_code == 200
     assert response.json()["status"] == "NOT_STARTED"
     assert response.json()["paper"]["status"] == "NOT_STARTED"
-    assert response.json()["external_calls_performed"] == 0
+    assert response.json()["external_calls_performed"] is None
+    assert response.json()["counter_scope"] == "NOT_MEASURED"

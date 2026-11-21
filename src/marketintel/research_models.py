@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -27,6 +29,16 @@ RESEARCH_ARMS = (
     "RULES_PLUS_CLAUDE",
     "RULES_PLUS_DUAL",
 )
+
+
+def _canonical_hash(value: object) -> str:
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _aware(value: datetime, name: str) -> datetime:
@@ -117,6 +129,19 @@ class DatasetManifest(BaseModel):
     def created_is_aware(cls, value: datetime) -> datetime:
         return _aware(value, "created_at_utc")
 
+    def canonical_content_hash(self) -> str:
+        """Hash the complete manifest preimage without trusting its asserted digest."""
+        preimage = self.model_dump(mode="json", exclude={"content_hash"})
+        return _canonical_hash(preimage)
+
+    def validate_identity(self) -> None:
+        actual = self.canonical_content_hash()
+        if actual != self.content_hash:
+            raise ValueError(
+                "Dataset manifest content_hash does not match its canonical preimage: "
+                f"expected {actual}"
+            )
+
 
 class CostPolicy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -160,6 +185,16 @@ class ExperimentConfig(BaseModel):
     trial_number: int = Field(default=1, ge=1)
     holdout_start_utc: datetime | None = None
     embargo_seconds: int = Field(default=0, ge=0)
+    code_commit: str = "UNRECORDED"
+    algorithm_version: str = "phase5-shared-engine-v1"
+    engine_policy_version: str = "m3a-v2"
+    feature_policy_version: str = "phase5-feature-state-v1"
+    revision_selection_policy: Literal["LATEST_ELIGIBLE_BEFORE_OUTCOME"] = (
+        "LATEST_ELIGIBLE_BEFORE_OUTCOME"
+    )
+    partition_policy: Literal["PAST_ONLY_PURGED_WALK_FORWARD"] = "PAST_ONLY_PURGED_WALK_FORWARD"
+    fold_count: int = Field(default=3, ge=2, le=50)
+    variant_id: str = "PRIMARY"
 
     @model_validator(mode="after")
     def valid_window(self) -> ExperimentConfig:
@@ -172,6 +207,11 @@ class ExperimentConfig(BaseModel):
         if self.holdout_start_utc is not None:
             _aware(self.holdout_start_utc, "holdout_start_utc")
         return self
+
+    def canonical_config_hash(self) -> str:
+        """Bind all scientific choices while excluding the human experiment label."""
+        preimage = self.model_dump(mode="json", exclude={"experiment_id"})
+        return _canonical_hash(preimage)
 
 
 class ReplayObservation(BaseModel):
@@ -188,6 +228,7 @@ class ReplayObservation(BaseModel):
         "INSTRUMENT_VERSION",
         "CANDIDATE",
         "PROVIDER_COMPLETION",
+        "EXECUTABLE_QUOTE",
         "EXPIRY",
     ]
     symbol: str
@@ -213,6 +254,7 @@ class ReplayPoint(BaseModel):
     status: Literal["ELIGIBLE", "UNAVAILABLE"]
     reason: str
     rolling_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_hash: str = Field(default="0" * 64, pattern=r"^[0-9a-f]{64}$")
 
 
 class ReplayCheckpoint(BaseModel):
@@ -221,9 +263,14 @@ class ReplayCheckpoint(BaseModel):
     schema_version: Literal["1"] = "1"
     experiment_id: str
     dataset_hash: str
+    config_hash: str = "0" * 64
+    state_schema_version: str = "phase5-bounded-v1"
     next_evaluation_utc: datetime
     input_offset: int = Field(ge=0)
     visible_observation_ids: tuple[str, ...]
+    visible_count: int = Field(default=0, ge=0)
+    evidence_hash: str = Field(default="0" * 64, pattern=r"^[0-9a-f]{64}$")
+    input_prefix_hash: str = Field(default="0" * 64, pattern=r"^[0-9a-f]{64}$")
     rolling_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     points_completed: int = Field(ge=0)
 

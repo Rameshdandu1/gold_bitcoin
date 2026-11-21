@@ -11,12 +11,11 @@ import csv
 import hashlib
 import html
 import json
-import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from marketintel.research_engine import run_shared_workflow
 from marketintel.research_evaluation import (
     arm_metrics,
     paired_day_block_difference,
@@ -131,52 +130,130 @@ def command_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_run_workflow(args: argparse.Namespace) -> int:
+    """Run the production detectors and evidence-derived evaluator with no external calls."""
+    manifest_path = Path(args.manifest).resolve()
+    manifest = load_manifest(manifest_path, verify_files=True)
+    config = _load_config(Path(args.config).resolve())
+    store = ResearchStore(
+        Path(args.database).resolve(), production_path=Path(args.production_database).resolve()
+    )
+    with TemporaryDirectory(prefix="marketintel-workflow-") as temporary:
+        observations = spool_observations(
+            manifest_path,
+            manifest,
+            Path(temporary) / "sort.sqlite3",
+            batch_size=args.chunk_size,
+        )
+        result = run_shared_workflow(
+            manifest,
+            config,
+            observations,
+            store,
+            presorted=True,
+        )
+    print(json.dumps(result, sort_keys=True, default=str))
+    return 0
+
+
 def command_evaluate(args: argparse.Namespace) -> int:
     store = ResearchStore(
         Path(args.database).resolve(), production_path=Path(args.production_database).resolve()
     )
-    count = 0
-    with Path(args.opportunities).open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            try:
-                record = OpportunityRecord.model_validate_json(line)
-            except ValueError as exc:
-                raise ValueError(f"Invalid opportunity line {line_number}: {exc}") from exc
-            store.save_opportunity(args.experiment_id, record)
-            count += 1
-    rows = store.opportunities(args.experiment_id)
-    metrics = arm_metrics(rows)
-    holdout_start = datetime.fromisoformat(args.holdout_start) if args.holdout_start else None
-    if holdout_start is not None and (
-        holdout_start.tzinfo is None or holdout_start.utcoffset() is None
-    ):
-        raise ValueError("Holdout start must be timezone aware")
+    experiment = store.experiment(args.experiment_id)
+    if experiment is None:
+        raise ValueError("Experiment does not exist; run the shared workflow first")
+    _, config = experiment
+    all_rows = store.opportunities(args.experiment_id)
+    selected: dict[str, OpportunityRecord] = {}
+    for row in sorted(all_rows, key=lambda item: (item.observed_at_utc, item.revision_id)):
+        selected[row.opportunity_id] = row
+    rows = list(selected.values())
+    holdout_start = config.holdout_start_utc
+    development_rows = [
+        row
+        for row in rows
+        if holdout_start is None or row.label_information_end_utc < holdout_start
+    ]
+    held_out = [
+        row
+        for row in rows
+        if holdout_start is not None and row.label_information_end_utc >= holdout_start
+    ]
+    metrics = arm_metrics(development_rows)
     folds = (
         purged_folds(
-            rows,
-            fold_count=args.folds,
-            embargo_seconds=args.embargo_seconds,
+            development_rows,
+            fold_count=config.fold_count,
+            embargo_seconds=config.embargo_seconds,
             holdout_start=holdout_start,
         )
-        if len({x.opportunity_id for x in rows}) >= args.folds
+        if len({x.opportunity_id for x in development_rows}) >= config.fold_count
         else []
     )
     paired = {
-        arm: paired_day_block_difference(rows, "RULES_ONLY", arm)
+        arm: paired_day_block_difference(development_rows, "RULES_ONLY", arm)
         for arm in ("RULES_PLUS_GPT", "RULES_PLUS_CLAUDE", "RULES_PLUS_DUAL")
     }
     report = {
-        "classification": "EXPLORATORY" if rows else "INSUFFICIENT_DATA",
+        "classification": "EXPLORATORY" if development_rows else "INSUFFICIENT_DATA",
+        "partition": "DEVELOPMENT",
+        "experiment_id": args.experiment_id,
+        "config_hash": config.canonical_config_hash(),
+        "unique_opportunities": len(rows),
+        "development_opportunities": len(development_rows),
+        "protected_or_crossing_holdout": len(held_out),
         "metrics": metrics,
         "folds": folds,
         "paired_day_blocks": paired,
-        "actual_experiment_cost_microusd": args.actual_experiment_cost_microusd,
+        "actual_experiment_cost_microusd": 0,
         "cost_note": "Actual experiment spend is separate from per-arm attributable cost.",
     }
-    store.save_report(args.experiment_id, "evaluation", report)
-    print(json.dumps({"records_written": count, **report}, sort_keys=True, default=str))
+    store.save_report(args.experiment_id, "development-evaluation-v1", report)
+    print(json.dumps(report, sort_keys=True, default=str))
+    return 0
+
+
+def command_final_holdout(args: argparse.Namespace) -> int:
+    if args.acknowledge_protected_holdout != "FINAL_EVALUATION":
+        raise ValueError("Explicit --acknowledge-protected-holdout FINAL_EVALUATION is required")
+    store = ResearchStore(
+        Path(args.database).resolve(), production_path=Path(args.production_database).resolve()
+    )
+    experiment = store.experiment(args.experiment_id)
+    if experiment is None:
+        raise ValueError("Experiment does not exist")
+    _, config = experiment
+    if config.holdout_start_utc is None:
+        raise ValueError("Experiment has no frozen protected holdout")
+    store.record_holdout_access(
+        args.experiment_id,
+        config.canonical_config_hash(),
+        purpose="FINAL_EVALUATION",
+    )
+    selected: dict[str, OpportunityRecord] = {}
+    for row in sorted(
+        store.opportunities(args.experiment_id),
+        key=lambda item: (item.observed_at_utc, item.revision_id),
+    ):
+        selected[row.opportunity_id] = row
+    holdout = [
+        row
+        for row in selected.values()
+        if row.label_information_end_utc >= config.holdout_start_utc
+    ]
+    report = {
+        "classification": "EXPLORATORY" if holdout else "INSUFFICIENT_DATA",
+        "partition": "FINAL_HOLDOUT",
+        "experiment_id": args.experiment_id,
+        "config_hash": config.canonical_config_hash(),
+        "holdout_start_utc": config.holdout_start_utc.isoformat(),
+        "unique_opportunities": len(holdout),
+        "metrics": arm_metrics(holdout),
+        "warning": "One-time protected hypothetical holdout access; not an empirical claim.",
+    }
+    store.save_report(args.experiment_id, "final-holdout-v1", report)
+    print(json.dumps(report, sort_keys=True, default=str))
     return 0
 
 
@@ -184,7 +261,22 @@ def command_report(args: argparse.Namespace) -> int:
     store = ResearchStore(
         Path(args.database).resolve(), production_path=Path(args.production_database).resolve()
     )
-    rows = store.opportunities(args.experiment_id)
+    experiment = store.experiment(args.experiment_id)
+    if experiment is None:
+        raise ValueError("Experiment does not exist")
+    manifest, config = experiment
+    selected: dict[str, OpportunityRecord] = {}
+    for row in sorted(
+        store.opportunities(args.experiment_id),
+        key=lambda item: (item.observed_at_utc, item.revision_id),
+    ):
+        selected[row.opportunity_id] = row
+    rows = [
+        row
+        for row in selected.values()
+        if config.holdout_start_utc is None
+        or row.label_information_end_utc < config.holdout_start_utc
+    ]
     metrics = arm_metrics(rows)
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -192,7 +284,15 @@ def command_report(args: argparse.Namespace) -> int:
         "experiment_id": args.experiment_id,
         "classification": "EXPLORATORY" if rows else "INSUFFICIENT_DATA",
         "hypothetical": True,
+        "partition": "DEVELOPMENT",
+        "dataset_id": manifest.dataset_id,
+        "dataset_hash": manifest.content_hash,
+        "config_hash": config.canonical_config_hash(),
+        "data_mode": manifest.data_mode,
         "opportunities": len({x.opportunity_id for x in rows}),
+        "revision_records": len(rows),
+        "engine_matrix": store.engine_matrix(args.experiment_id),
+        "source_coverage": [item.model_dump(mode="json") for item in manifest.coverage],
         "metrics": metrics,
         "warning": (
             "Exploratory hypothetical research; fixtures do not establish accuracy or "
@@ -220,7 +320,7 @@ def command_report(args: argparse.Namespace) -> int:
                 }
             )
     markdown = (
-        "# Phase 4 research report\n\n"
+        "# Phase 5 research report\n\n"
         + summary["warning"]
         + "\n\n```json\n"
         + json.dumps(summary, indent=2, sort_keys=True)
@@ -229,17 +329,18 @@ def command_report(args: argparse.Namespace) -> int:
     (output / "report.md").write_text(markdown, encoding="utf-8")
     (output / "report.html").write_text(
         "<!doctype html><meta charset='utf-8'><title>Research report</title>"
-        "<h1>Phase 4 research report</h1><p>"
+        "<h1>Phase 5 research report</h1><p>"
         + html.escape(summary["warning"])
         + "</p><pre>"
         + html.escape(json.dumps(summary, indent=2, sort_keys=True))
         + "</pre>",
         encoding="utf-8",
     )
-    if args.manifest:
-        shutil.copy2(Path(args.manifest), output / "dataset-manifest.json")
-    if args.config:
-        shutil.copy2(Path(args.config), output / "experiment-config.json")
+    _write_json(output / "dataset-manifest.json", manifest.model_dump(mode="json"))
+    _write_json(output / "experiment-config.json", config.model_dump(mode="json"))
+    with (output / "selected-opportunities.jsonl").open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(row.model_dump_json() + "\n")
     _checksums(output)
     print(
         json.dumps(
@@ -266,23 +367,29 @@ def parser() -> argparse.ArgumentParser:
     replay_command.add_argument("--chunk-size", type=int, default=2_000)
     replay_command.add_argument("--progress-every", type=int, default=1_000)
     replay_command.set_defaults(handler=command_replay)
+    workflow = commands.add_parser("run-workflow")
+    workflow.add_argument("--manifest", required=True)
+    workflow.add_argument("--config", required=True)
+    workflow.add_argument("--database", required=True)
+    workflow.add_argument("--production-database", default="data/marketintel.sqlite3")
+    workflow.add_argument("--chunk-size", type=int, default=2_000)
+    workflow.set_defaults(handler=command_run_workflow)
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument("--database", required=True)
     evaluate.add_argument("--production-database", default="data/marketintel.sqlite3")
     evaluate.add_argument("--experiment-id", required=True)
-    evaluate.add_argument("--opportunities", required=True)
-    evaluate.add_argument("--folds", type=int, default=3)
-    evaluate.add_argument("--embargo-seconds", type=int, default=0)
-    evaluate.add_argument("--holdout-start", help="ISO-8601 UTC start of untouched holdout")
-    evaluate.add_argument("--actual-experiment-cost-microusd", type=int, default=0)
     evaluate.set_defaults(handler=command_evaluate)
+    holdout = commands.add_parser("final-holdout")
+    holdout.add_argument("--database", required=True)
+    holdout.add_argument("--production-database", default="data/marketintel.sqlite3")
+    holdout.add_argument("--experiment-id", required=True)
+    holdout.add_argument("--acknowledge-protected-holdout", required=True)
+    holdout.set_defaults(handler=command_final_holdout)
     report = commands.add_parser("report")
     report.add_argument("--database", required=True)
     report.add_argument("--production-database", default="data/marketintel.sqlite3")
     report.add_argument("--experiment-id", required=True)
     report.add_argument("--output", required=True)
-    report.add_argument("--manifest")
-    report.add_argument("--config")
     report.set_defaults(handler=command_report)
     return root
 

@@ -174,6 +174,17 @@ class GateResult(BaseModel):
     detail: str
 
 
+class CurrentRiskResult(BaseModel):
+    """Deterministic current-market verdict shared by consensus and alert dispatch."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    eligible: bool
+    reason: str
+    supported_target_indices: tuple[StrictInt, ...] = ()
+    gates: tuple[GateResult, ...]
+
+
 class ConsensusDecisionV2(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

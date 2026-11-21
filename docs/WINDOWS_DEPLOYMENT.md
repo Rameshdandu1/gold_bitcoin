@@ -117,16 +117,25 @@ Use the repository virtual environment and Windows paths. Research and paper fil
 `DATABASE_PATH`:
 
 ```powershell
-.\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest tests\fixtures\research\manifest.json
-.\.venv\Scripts\python.exe -m marketintel.research replay --manifest tests\fixtures\research\manifest.json --config tests\fixtures\research\experiment.json --database data\research.sqlite3 --production-database data\marketintel.sqlite3 --checkpoint data\research-checkpoint.json
+.\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures
+.\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest data\phase5-fixtures\gold-manifest.json
+.\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3
+.\.venv\Scripts\python.exe -m marketintel.research evaluate --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
+.\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
 ```
 
-The example paper config and `PAPER_COLLECTION_ENABLED` are disabled. Enable collection only for an
-approved local recorded-decision source; the worker is bounded by `--once` and cannot send orders.
-Back up both research SQLite files, manifests, configs, checkpoints and report `SHA256SUMS` together.
-Verify checkpoint restart hash parity, retain explicit source gaps and never edit a recorded paper
-decision. Destination-server task installation, reboot/restore and long paper soak were not run.
+Repeat the workflow with the BTC manifest/config and `phase5-btc-workflow-v1`. Every generated file
+is labelled `SYNTHETIC_FIXTURE`; delete it before configuring licensed/private evidence. The
+example paper config and `PAPER_COLLECTION_ENABLED` are disabled. An approved local paper stream
+must declare a stable `source_identity` and increment `source_generation` on rotation; replacement
+or truncation is refused. The worker is bounded by `--once` and cannot send orders.
+
+Back up production, research and paper SQLite files with their manifests, configurations, source
+generation records, checkpoints and report `SHA256SUMS`. A safe restore stops all writers, verifies
+each database, restores the matching artifact set, then reruns the bounded command. Do not copy a
+cursor without its exact source identity/generation. Destination-server Task Scheduler install,
+reboot/restore, log rotation and long paper/live soaks were not run in Phase 5.
 
 ## 7. Operational acceptance still required
 

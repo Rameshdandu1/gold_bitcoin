@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -135,9 +136,16 @@ def current_eligibility(
 
 
 class ReviewWorker:
-    def __init__(self, store: Store, settings: Settings):
+    def __init__(
+        self,
+        store: Store,
+        settings: Settings,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ):
         self.store = store
         self.settings = settings
+        self.clock = clock or (lambda: datetime.now(UTC))
         self.gpt = GPTAnalyst(settings)
         self.claude = ClaudeAnalyst(settings)
         self.orchestrator = ReviewOrchestrator(
@@ -145,6 +153,7 @@ class ReviewWorker:
             settings,
             self.gpt,
             self.claude,
+            clock=self.clock,
         )
 
     @staticmethod
@@ -195,7 +204,7 @@ class ReviewWorker:
         return load(latest["OPENAI"]), load(latest["ANTHROPIC"])
 
     async def run_once(self, *, owner: str, now: datetime | None = None) -> bool:
-        now = now or datetime.now(UTC)
+        now = now or self.clock()
         claim = self.store.claim_review_job(
             owner,
             now=now,
@@ -243,8 +252,24 @@ class ReviewWorker:
                 )["attempt_id"]
                 for provider in ("OPENAI", "ANTHROPIC")
             )
-            evaluated_at = datetime.now(UTC)
+            evaluated_at = self.clock()
             deadline_at = datetime.fromisoformat(run["deadline_at_utc"])
+            if evaluated_at >= deadline_at:
+                self.store.record_review_disposition(
+                    run_id=claim["run_id"],
+                    job_id=claim["job_id"],
+                    code="REVIEW_DEADLINE_EXPIRED",
+                    now=evaluated_at,
+                    detail={"redispatched": False},
+                )
+                self.store.complete_review_job(
+                    claim["job_id"],
+                    owner=owner,
+                    generation=claim["generation"],
+                    status="WAIT",
+                    now=evaluated_at,
+                )
+                return True
             eligibility = current_eligibility(
                 self.store,
                 self.settings,
@@ -273,6 +298,21 @@ class ReviewWorker:
                 deadline_at=deadline_at,
                 now=evaluated_at,
             )
+            if not committed:
+                self.store.record_review_disposition(
+                    run_id=claim["run_id"],
+                    job_id=claim["job_id"],
+                    code="FINAL_EVIDENCE_CHANGED",
+                    now=evaluated_at,
+                    detail={"redispatched": False},
+                )
+                self.store.complete_review_job(
+                    claim["job_id"],
+                    owner=owner,
+                    generation=claim["generation"],
+                    status="WAIT",
+                    now=evaluated_at,
+                )
             self.store.record_source_status(
                 "review_worker",
                 decision.status if committed else "WAIT",
@@ -284,7 +324,7 @@ class ReviewWorker:
                 owner=owner,
                 generation=claim["generation"],
                 status="FAILED",
-                now=datetime.now(UTC),
+                now=self.clock(),
             )
             self.store.record_source_status("review_worker", "ERROR", type(exc).__name__)
             LOGGER.warning("Review job failed closed: %s", type(exc).__name__)
