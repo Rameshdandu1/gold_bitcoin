@@ -87,6 +87,8 @@ class DeltaProduct(BaseModel):
 class Instrument(BaseModel):
     """Validated market metadata used when normalizing contract quantities."""
 
+    model_config = ConfigDict(frozen=True)
+
     schema_version: Literal["1"] = "1"
     venue: Literal["delta_india"] = "delta_india"
     product_id: int = Field(gt=0)
