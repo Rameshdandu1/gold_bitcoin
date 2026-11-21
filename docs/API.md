@@ -20,6 +20,11 @@ authentication only over a trusted loopback connection, VPN, or an HTTPS reverse
 | `GET /api/budget` | current UTC-day provider reservations and reported costs |
 | `GET /api/queue` | review-job and alert-outbox counts plus stale lease counts |
 | `GET /api/research/summary` | isolated experiment/paper counts and explicit evidence classification; no external call |
+| `GET /api/research/experiments?limit=50&offset=0` | bounded experiment identities, canonical hashes, data mode and source coverage |
+| `GET /api/research/experiments/{id}` | authoritative stored manifest/configuration, counts, engine matrix, reports and scoped action counters |
+| `GET /api/research/experiments/{id}/engines` | six-engine evaluation/candidate counts for the selected experiment |
+| `GET /api/research/experiments/{id}/opportunities?limit=50&offset=0` | bounded selected revision, four-arm decision and outcome records |
+| `GET /api/research/paper/transitions?limit=100&offset=0` | append-only prospective paper decision/outcome transitions without raw provider payloads |
 | `GET /docs`, `/openapi.json` | authenticated FastAPI schema and documentation |
 
 Candidate responses keep `current_lifecycle_*` separate from historical consensus. Provider cards
@@ -38,6 +43,9 @@ and Slack delivery are disabled by default. Configuring credentials does not aut
 paid calls or send messages. Current model/account entitlement and actual Slack delivery require a
 separate bounded operator-approved smoke test.
 
-The research summary uses the same operator authentication as every non-liveness route.
+The research summary uses the same operator authentication as every non-liveness route. Action
+counters carry an explicit experiment scope; an unmeasured counter is `null`, never a fabricated
+zero. Dataset mode, hashes and counts come from the selected immutable experiment. Licensed raw
+records and raw provider payloads are not returned.
 `NOT_STARTED`, `EXPLORATORY` and insufficient-evidence labels are evidence states, not zero return
 or a failed-strategy result. It returns counts and classifications, not secrets or dataset rows.

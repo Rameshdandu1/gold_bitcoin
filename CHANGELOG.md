@@ -4,6 +4,39 @@ All notable changes to this project are documented in this file.
 
 The project uses four-part release versions for shipped milestones.
 
+## [0.5.0.0] - 2026-11-21
+
+### Added
+
+- Add a shared bounded research processor that invokes all six production detectors from
+  availability-ordered observations, freezes four-arm decisions, and derives quote-side outcomes
+  from an immutable isolated journal.
+- Add canonical manifest/configuration identities, prefix-validated bounded checkpoints,
+  conflict-detecting research records, protected holdout access, operational abstention accounting,
+  and authoritative checksummed exports.
+- Add source-bound prospective paper decisions/outcomes with write-before-entry chronology,
+  restart/truncation/generation checks, plus authenticated experiment, engine, opportunity and paper
+  transition views.
+- Add deterministic Gold/BTC synthetic workflow generation and end-to-end acceptance through the
+  real FAST, HOURLY and SESSION detectors for each asset.
+
+### Fixed
+
+- Recheck the complete current-risk policy at notification delivery and transaction-fence dispatch
+  against revision, lifecycle, locally persisted market evidence, expiry and a valid lease.
+- Prevent terminal or configuration-drifted reviews from spending provider budget; freeze complete
+  request configuration and terminalize expired saved-result recovery without redispatch.
+- Prevent pre-entry stop recovery, quote gaps, partial boundary bars, future training rows and
+  holdout-crossing labels from producing unsupported outcomes or validation results.
+
+### Evidence and safety
+
+- Software acceptance uses generated `SYNTHETIC_FIXTURE` observations only. It establishes no
+  accuracy, probability, profitability, licensed-data coverage or elapsed prospective duration.
+- Live ingestion, paid AI, alerts and paper collection remain disabled by default;
+  `TRADING_ENABLED=true` remains refused. No paid request, real notification, order or deployment
+  was performed.
+
 ## [0.4.0.0] - 2026-11-21
 
 ### Added

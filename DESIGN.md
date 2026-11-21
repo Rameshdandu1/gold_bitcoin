@@ -1,11 +1,38 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: Design v0.4 / research MVP. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: Design v0.5 / research-completion MVP. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
-## Phase 4 evidence architecture
+## Phase 5 evidence architecture
+
+The public `run-workflow` command validates the canonical dataset manifest, externally sorts input
+by factual availability, and sends normalized trades, candles, book generations, instruments and
+recorded provider completions through `SharedResearchEngine`. That service retains at most 5,000
+trades per symbol and 2,000 candles per symbol/resolution and invokes the production
+`detect_signal` function for all six engines. It never has a provider, notification, account or
+order transport.
+
+Candidates, four-arm decisions and their exact target/configuration identities are immutable
+records. Decisions are stored before the evaluator reads the journal-backed future quote path.
+Executable outcomes reuse bid/ask, tick, multiplier, fee, slippage, funding and gap policies.
+Ordinary evaluation selects one revision per opportunity and excludes label intervals that enter
+the frozen holdout. Protected holdout access is a separate recorded command.
+
+Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
+hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,
+seed and variant policy. Checkpoints bind both hashes and validate the consumed input prefix while
+retaining only the most recent 128 diagnostic event IDs. Conflicting writes fail instead of
+overwriting scientific history.
+
+The paper ledger binds candidate, revision, arm, target, configuration, source identity/generation,
+decision persistence time and eligible-entry time. Prospective entries/outcomes must occur after
+the decision write and be factually available before recording. Historical import remains a
+distinct evidence mode. The worker advances a source-bound cursor after each idempotent event and
+detects replacement or truncation.
+
+## Phase 4 foundation
 
 Historical observations carry exchange time and factual `available_at_utc`; replay orders by
 availability time, persistence sequence, event-kind priority and immutable event ID. Dataset
@@ -27,7 +54,7 @@ purge overlapping label-information intervals with a time embargo.
 [Phase 3 review](docs/audits/phase-3-independent-review.md) findings have regression coverage and
 Phase 4 corrections. Architectural requirements remain distinct from empirical acceptance: live
 providers, licensed data, prospective duration and deployment are not proven by fixtures. Follow
-[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md), starting with corrective slice 4A. Passing fixtures are
+[CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md). Passing fixtures are
 not evidence of live provider readiness or strategy performance.
 
 ## Business purpose

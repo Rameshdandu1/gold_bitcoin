@@ -123,9 +123,28 @@ These checkboxes mean software and deterministic-fixture completion only. Real d
 genuine historical provider assessments, forward paper observation, statistical uncertainty on an
 adequate sample and destination Windows Server deployment remain open acceptance work.
 
-## Phase 5 — derivatives/optional execution (separate approval)
+## Phase 5 — research completion and operational validation
+
+- [x] **5A:** shared current-risk delivery policy, transaction-fenced dispatch authorization,
+  zero-call terminal/configuration preflight and durable expired-result dispositions.
+- [x] **5B:** canonical dataset/config identities, prefix-bound bounded replay, immutable journal and
+  shared production-detector workflow for Gold/BTC across all six engines.
+- [x] **5C:** public quote-path evaluation with readiness/latency once, pre-entry invalidation,
+  expiry/path uncertainty and verified quote-side contract/cost calculations.
+- [x] **5D:** unique opportunity/revision selection, past-only purged folds, frozen holdout policy,
+  known-abstention operational comparisons and explicit final-holdout access.
+- [x] **5E:** source-bound prospective paper event loop with write-before-entry/outcome chronology,
+  legal arm states, restart idempotence, truncation and generation checks.
+- [x] **5F:** authenticated experiment/engine/opportunity/paper views, authoritative checksummed
+  exports, Gold/BTC public fixture workflows and native Windows instructions.
+
+These checkboxes are software acceptance on explicitly synthetic streams. Adequate licensed market
+history, genuine contemporary provider completions, extended prospective observation, live
+integration soaks and destination-host recovery remain empirical/operational gates.
+
+## Phase 6 — derivatives/optional execution (separate approval; deferred)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.
-20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's initial scope.
+20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's current scope.
 
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
@@ -134,3 +153,6 @@ adequate sample and destination Windows Server deployment remain open acceptance
   by the findings assigned to 4A. Live provider/model entitlement, paid-call behavior, Slack delivery,
   Windows installation and extended market soak remain separate operator acceptance gates.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
+- M5 software: the six-engine workflow, outcome evaluator, partitions, paper chronology and operator
+  surfaces agree on immutable hypothetical evidence. M5 empirical readiness remains incomplete
+  until real licensed and prospective evidence exists.
