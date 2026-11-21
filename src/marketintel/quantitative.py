@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Literal
 
 from marketintel.features import (
+    RESOLUTION_MINUTES,
     BookView,
     FeatureIntegrityError,
     breakout_retest,
@@ -26,6 +27,7 @@ from marketintel.models import (
     CandidateLifecycleEvent,
     CandidateSignal,
     Candle,
+    CoverageWindow,
     DetectionResult,
     Direction,
     ExternalMetric,
@@ -63,7 +65,7 @@ class QuantEngineConfig:
     gold_target_distances: tuple[Decimal, ...] = ()
     btc_target_percentages: tuple[Decimal, ...] = ()
     btc_target_atr_multipliers: tuple[Decimal, ...] = ()
-    rule_version: str = "m2-v1"
+    rule_version: str = "m3a-v2"
     allow_token_market_only: bool = True
 
 
@@ -417,13 +419,80 @@ def detect_signal(
         return _result(config, SignalState.WAIT, now, str(exc))
     if len(rows) < config.min_candles:
         return _result(config, SignalState.WAIT, now, "Insufficient contiguous closed history")
-    rows = rows[-config.min_candles :]
-    latest_close = candle_close(rows[-1])
+    trigger_rows = rows[-config.min_candles :]
+    latest_close = candle_close(trigger_rows[-1])
     age = (now - latest_close).total_seconds()
     if age < 0 or age > config.stale_after_seconds:
         return _result(
             config, SignalState.WAIT, now, "Latest closed candle is stale or in the future"
         )
+    base_minutes = RESOLUTION_MINUTES[config.primary_resolution]
+    interval = timedelta(minutes=base_minutes)
+    session_start = datetime.combine(
+        trigger_rows[-1].open_time.astimezone(UTC).date(), datetime.min.time(), tzinfo=UTC
+    )
+    session_rows = [row for row in rows if row.open_time >= session_start]
+    expected_session_count = int((latest_close - session_start) / interval)
+    session_complete = (
+        bool(session_rows)
+        and session_rows[0].open_time.astimezone(UTC) == session_start
+        and candle_close(session_rows[-1]).astimezone(UTC) == latest_close.astimezone(UTC)
+        and len(session_rows) == expected_session_count
+    )
+    prior_start = session_start - timedelta(days=1)
+    prior_rows = [row for row in rows if prior_start <= row.open_time < session_start]
+    expected_prior_count = int(timedelta(days=1) / interval)
+    prior_complete = (
+        len(prior_rows) == expected_prior_count
+        and bool(prior_rows)
+        and prior_rows[0].open_time.astimezone(UTC) == prior_start
+        and candle_close(prior_rows[-1]).astimezone(UTC) == session_start
+    )
+    coverage = (
+        CoverageWindow(
+            name="TRIGGER",
+            required=True,
+            complete=len(trigger_rows) == config.min_candles,
+            expected_start_utc=latest_close - interval * config.min_candles,
+            expected_end_utc=latest_close,
+            actual_start_utc=trigger_rows[0].open_time,
+            actual_end_utc=candle_close(trigger_rows[-1]),
+            candle_count=len(trigger_rows),
+            reason="complete"
+            if len(trigger_rows) == config.min_candles
+            else "missing trigger bars",
+        ),
+        CoverageWindow(
+            name="UTC_SESSION",
+            required=True,
+            complete=session_complete,
+            expected_start_utc=session_start,
+            expected_end_utc=latest_close,
+            actual_start_utc=session_rows[0].open_time if session_rows else None,
+            actual_end_utc=candle_close(session_rows[-1]) if session_rows else None,
+            candle_count=len(session_rows),
+            reason="complete" if session_complete else "partial UTC session",
+        ),
+        CoverageWindow(
+            name="PREVIOUS_UTC_DAY",
+            required=False,
+            complete=prior_complete,
+            expected_start_utc=prior_start,
+            expected_end_utc=session_start,
+            actual_start_utc=prior_rows[0].open_time if prior_rows else None,
+            actual_end_utc=candle_close(prior_rows[-1]) if prior_rows else None,
+            candle_count=len(prior_rows),
+            reason="complete" if prior_complete else "previous UTC day unavailable or partial",
+        ),
+    )
+    if not session_complete:
+        return _result(
+            config,
+            SignalState.WAIT,
+            now,
+            "Incomplete required UTC-session coverage",
+        )
+
     contexts: dict[str, Sequence[Candle]] = {}
     for resolution in config.context_resolutions:
         try:
@@ -472,6 +541,7 @@ def detect_signal(
             engine=config.engine,
             horizon_minutes=config.horizon_minutes,
             candles=rows,
+            trigger_candles=trigger_rows,
             trades=trades,
             instrument=instrument,
             through=now,
@@ -480,6 +550,7 @@ def detect_signal(
             external_metrics=valid_external_metrics,
             context_candles=contexts,
             warnings=warnings,
+            coverage=coverage,
             volatility_budget_multiplier=config.volatility_budget_multiplier,
             trade_max_age_seconds=config.stale_after_seconds,
         )
@@ -522,7 +593,7 @@ def detect_signal(
             snapshot=snapshot,
         )
 
-    direction, trigger, terminal = _trigger(config, rows, snapshot, contexts)
+    direction, trigger, terminal = _trigger(config, trigger_rows, snapshot, contexts)
     if direction is None:
         return _result(config, terminal or SignalState.WATCH, now, trigger, snapshot=snapshot)
 
@@ -591,7 +662,7 @@ def detect_signal(
                 snapshot=snapshot,
             )
     if config.trigger_family != "FAST" and snapshot.vwap is not None:
-        entry_check = Decimal(str(rows[-1].close))
+        entry_check = Decimal(str(trigger_rows[-1].close))
         if direction is Direction.BULLISH and entry_check < snapshot.vwap:
             return _result(
                 config,
@@ -609,8 +680,8 @@ def detect_signal(
                 snapshot=snapshot,
             )
 
-    entry = Decimal(str(rows[-1].close))
-    recent = rows[-5:]
+    entry = Decimal(str(trigger_rows[-1].close))
+    recent = trigger_rows[-5:]
     if direction is Direction.BULLISH:
         structural_risk = entry - Decimal(str(min(row.low for row in recent)))
     else:
@@ -753,6 +824,9 @@ def lifecycle_event(
     to_state: SignalState,
     occurred_at: datetime,
     reason: str,
+    price_source: Literal["EXECUTED_TRADE", "BID_ASK", "CLOSED_CANDLE", "NONE"] = "NONE",
+    price_policy_version: str = "m3a-price-v1",
+    source_event_id: str | None = None,
 ) -> CandidateLifecycleEvent:
     if to_state not in LEGAL_TRANSITIONS[from_state]:
         raise ValueError(f"Illegal signal transition: {from_state} -> {to_state}")
@@ -764,6 +838,9 @@ def lifecycle_event(
             to_state.value,
             occurred_at.astimezone(UTC).isoformat(),
             reason,
+            price_source,
+            price_policy_version,
+            source_event_id or "",
         ]
     )
     return CandidateLifecycleEvent(
@@ -774,6 +851,9 @@ def lifecycle_event(
         to_state=to_state,
         occurred_at_utc=occurred_at,
         reason=reason,
+        price_source=price_source,
+        price_policy_version=price_policy_version,
+        source_event_id=source_event_id,
     )
 
 
@@ -785,6 +865,8 @@ def terminal_transition(
     latest_price: Decimal,
     source_fresh: bool,
     evaluation_snapshot_id: str | None = None,
+    price_source: Literal["EXECUTED_TRADE", "BID_ASK", "CLOSED_CANDLE", "NONE"] = "NONE",
+    source_event_id: str | None = None,
 ) -> CandidateLifecycleEvent | None:
     if current_state is not SignalState.CANDIDATE:
         return None
@@ -811,6 +893,8 @@ def terminal_transition(
         to_state=to_state,
         occurred_at=now,
         reason=reason,
+        price_source=price_source,
+        source_event_id=source_event_id,
     )
 
 

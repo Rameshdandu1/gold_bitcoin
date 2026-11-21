@@ -41,6 +41,7 @@ def candle(start, index, *, close=100, high=101, low=99, volume=10):
         close=close,
         volume_contracts=volume,
         source="TEST_FIXTURE_NOT_LIVE",
+        available_at_utc=start + timedelta(minutes=index + 1),
     )
 
 
@@ -195,6 +196,28 @@ def test_structure_labels_hh_hl_lh_ll_bos_and_choch_without_repainting():
     )
     falling_kinds = {event.kind for event in structure_events(falling)}
     assert {StructureKind.LH, StructureKind.LL} <= falling_kinds
+
+
+def test_r3_structure_uses_first_break_identity_for_a_confirmed_pivot():
+    start = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
+    rows = [candle(start, index) for index in range(8)]
+    rows[2] = candle(start, 2, high=110, low=99, close=105)
+    rows[5] = candle(start, 5, high=112, low=100, close=111)
+    rows[6] = candle(start, 6, high=113, low=101, close=112)
+    rows[7] = candle(start, 7, high=114, low=102, close=113)
+
+    first_break_times = []
+    for length in (6, 7, 8):
+        event = next(
+            item
+            for item in structure_events(rows[:length])
+            if item.kind in {StructureKind.BOS, StructureKind.CHOCH}
+            and item.pivot_time_utc == start + timedelta(minutes=2)
+            and item.direction.value == "BULLISH"
+        )
+        first_break_times.append(event.confirmed_at_utc)
+
+    assert first_break_times == [start + timedelta(minutes=6)] * 3
 
 
 def test_book_imbalance_and_absorption_use_only_validated_depth():

@@ -3,12 +3,14 @@
 import hashlib
 import json
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from marketintel.analysis import CanonicalAnalysis, candidate_revision_id
 from marketintel.delta import OrderBookAssembler
 from marketintel.models import (
     AnalystAssessment,
@@ -19,6 +21,7 @@ from marketintel.models import (
     FeatureSnapshot,
     RawMarketEvent,
 )
+from marketintel.review import ConsensusDecisionV2, ProviderResult
 
 
 class Store:
@@ -117,6 +120,38 @@ class Store:
                     state TEXT NOT NULL,
                     detail TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS source_health (
+                    source TEXT PRIMARY KEY,
+                    transition_at_utc TEXT NOT NULL,
+                    heartbeat_at_utc TEXT NOT NULL,
+                    last_success_at_utc TEXT,
+                    state TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    last_error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS candidate_price_watermarks (
+                    candidate_id TEXT PRIMARY KEY,
+                    received_at_utc TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS rest_candle_observations (
+                    observation_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    resolution TEXT NOT NULL,
+                    request_start_utc TEXT NOT NULL,
+                    request_end_utc TEXT NOT NULL,
+                    response_available_at_utc TEXT NOT NULL,
+                    payload_digest TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS rest_candle_observations_no_update
+                    BEFORE UPDATE ON rest_candle_observations
+                    BEGIN SELECT RAISE(ABORT, 'rest_candle_observations is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS rest_candle_observations_no_delete
+                    BEFORE DELETE ON rest_candle_observations
+                    BEGIN SELECT RAISE(ABORT, 'rest_candle_observations is append-only'); END;
                 CREATE TABLE IF NOT EXISTS book_checkpoints (
                     symbol TEXT PRIMARY KEY,
                     updated_at_utc TEXT NOT NULL,
@@ -163,7 +198,201 @@ class Store:
                 CREATE TRIGGER IF NOT EXISTS source_status_events_no_delete
                     BEFORE DELETE ON source_status_events
                     BEGIN SELECT RAISE(ABORT, 'source_status_events is append-only'); END;
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    migration_id TEXT PRIMARY KEY,
+                    applied_at_utc TEXT NOT NULL
+                );
             """)
+            self._apply_phase3_migration(conn)
+            self._backfill_candidate_revision_identities(conn)
+
+    def _apply_phase3_migration(self, conn: sqlite3.Connection) -> None:
+        migration_id = "0003_phase3_review_pipeline"
+        if conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE migration_id=?", (migration_id,)
+        ).fetchone():
+            return
+        conn.executescript("""
+            CREATE TABLE analysis_envelopes (
+                digest TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                canonical_bytes BLOB NOT NULL,
+                created_at_utc TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX analysis_envelope_identity
+                ON analysis_envelopes (candidate_id, revision_id, digest);
+            CREATE TRIGGER analysis_envelopes_no_update
+                BEFORE UPDATE ON analysis_envelopes
+                BEGIN SELECT RAISE(ABORT, 'analysis_envelopes is append-only'); END;
+            CREATE TRIGGER analysis_envelopes_no_delete
+                BEFORE DELETE ON analysis_envelopes
+                BEGIN SELECT RAISE(ABORT, 'analysis_envelopes is append-only'); END;
+            CREATE TABLE candidate_revision_identities (
+                revision_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                observed_at_utc TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                UNIQUE(candidate_id, snapshot_id)
+            );
+            CREATE TABLE active_candidate_revisions (
+                candidate_id TEXT PRIMARY KEY,
+                revision_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                observed_at_utc TEXT NOT NULL,
+                generation INTEGER NOT NULL
+            );
+            CREATE TABLE review_runs (
+                run_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                envelope_digest TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                risk_policy_version TEXT NOT NULL,
+                provider_config_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                deadline_at_utc TEXT NOT NULL,
+                UNIQUE(revision_id, envelope_digest, prompt_version, provider_config_json)
+            );
+            CREATE TABLE review_jobs (
+                job_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                available_at_utc TEXT NOT NULL,
+                lease_owner TEXT,
+                lease_expires_at_utc TEXT,
+                lease_generation INTEGER NOT NULL DEFAULT 0,
+                dispatch_id TEXT,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            );
+            CREATE INDEX review_jobs_claimable
+                ON review_jobs(status, available_at_utc, lease_expires_at_utc);
+            CREATE TABLE provider_attempts_v2 (
+                attempt_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL,
+                lease_generation INTEGER NOT NULL,
+                dispatch_id TEXT NOT NULL UNIQUE,
+                requested_model TEXT NOT NULL,
+                returned_model TEXT,
+                status TEXT NOT NULL,
+                started_at_utc TEXT NOT NULL,
+                completed_at_utc TEXT,
+                request_id TEXT,
+                response_id TEXT,
+                finish_reason TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                estimated_cost_microusd INTEGER,
+                actual_cost_microusd INTEGER,
+                failure_code TEXT,
+                assessment_json TEXT,
+                metadata_json TEXT NOT NULL,
+                UNIQUE(run_id, provider, attempt_number)
+            );
+            CREATE TRIGGER provider_attempts_v2_no_update
+                BEFORE UPDATE ON provider_attempts_v2
+                BEGIN SELECT RAISE(ABORT, 'provider_attempts_v2 is append-only'); END;
+            CREATE TRIGGER provider_attempts_v2_no_delete
+                BEFORE DELETE ON provider_attempts_v2
+                BEGIN SELECT RAISE(ABORT, 'provider_attempts_v2 is append-only'); END;
+            CREATE TABLE consensus_decisions_v2 (
+                decision_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL UNIQUE,
+                candidate_id TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                envelope_digest TEXT NOT NULL,
+                status TEXT NOT NULL,
+                decided_at_utc TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE TRIGGER consensus_decisions_v2_no_update
+                BEFORE UPDATE ON consensus_decisions_v2
+                BEGIN SELECT RAISE(ABORT, 'consensus_decisions_v2 is append-only'); END;
+            CREATE TRIGGER consensus_decisions_v2_no_delete
+                BEFORE DELETE ON consensus_decisions_v2
+                BEGIN SELECT RAISE(ABORT, 'consensus_decisions_v2 is append-only'); END;
+            CREATE TABLE budget_ledger (
+                reservation_id TEXT PRIMARY KEY,
+                day_utc TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL,
+                reserved_calls INTEGER NOT NULL,
+                reserved_input_tokens INTEGER NOT NULL,
+                reserved_output_tokens INTEGER NOT NULL,
+                reserved_cost_microusd INTEGER NOT NULL,
+                actual_input_tokens INTEGER,
+                actual_output_tokens INTEGER,
+                actual_cost_microusd INTEGER,
+                status TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                reconciled_at_utc TEXT,
+                UNIQUE(run_id, provider, attempt_number)
+            );
+            CREATE TRIGGER budget_ledger_no_delete
+                BEFORE DELETE ON budget_ledger
+                BEGIN SELECT RAISE(ABORT, 'budget_ledger is audit history'); END;
+            CREATE TABLE notification_outbox (
+                outbox_id TEXT PRIMARY KEY,
+                decision_id TEXT NOT NULL,
+                candidate_id TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                destination_id TEXT NOT NULL,
+                delivery_key TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                available_at_utc TEXT NOT NULL,
+                lease_owner TEXT,
+                lease_expires_at_utc TEXT,
+                lease_generation INTEGER NOT NULL DEFAULT 0,
+                receipt_id TEXT,
+                last_error TEXT,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            );
+        """)
+        conn.execute(
+            "INSERT INTO schema_migrations VALUES (?, ?)",
+            (migration_id, datetime.now(UTC).isoformat()),
+        )
+
+    def _backfill_candidate_revision_identities(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            "SELECT candidate_id, snapshot_id, observed_at_utc, payload "
+            "FROM candidate_revisions ORDER BY observed_at_utc"
+        ).fetchall()
+        for candidate_id_value, snapshot_id, observed_at, payload in rows:
+            candidate = Candidate.model_validate_json(payload)
+            revision_id = candidate_revision_id(candidate)
+            conn.execute(
+                "INSERT OR IGNORE INTO candidate_revision_identities VALUES (?, ?, ?, ?, ?)",
+                (revision_id, candidate_id_value, snapshot_id, observed_at, payload),
+            )
+            active = conn.execute(
+                "SELECT observed_at_utc FROM active_candidate_revisions WHERE candidate_id=?",
+                (candidate_id_value,),
+            ).fetchone()
+            if active is None:
+                conn.execute(
+                    "INSERT INTO active_candidate_revisions VALUES (?, ?, ?, ?, 1)",
+                    (candidate_id_value, revision_id, snapshot_id, observed_at),
+                )
+            elif observed_at > active[0]:
+                conn.execute(
+                    "UPDATE active_candidate_revisions SET revision_id=?, snapshot_id=?, "
+                    "observed_at_utc=?, generation=generation+1 WHERE candidate_id=?",
+                    (revision_id, snapshot_id, observed_at, candidate_id_value),
+                )
 
     def append_raw_event(self, event: RawMarketEvent) -> bool:
         """Persist once by deterministic event ID; duplicate delivery is harmless."""
@@ -392,6 +621,31 @@ class Store:
             current = conn.execute(
                 "SELECT state, detail FROM service_status WHERE service=?", (source,)
             ).fetchone()
+            health = conn.execute(
+                "SELECT transition_at_utc, last_success_at_utc FROM source_health WHERE source=?",
+                (source,),
+            ).fetchone()
+            transition_at = (
+                health[0] if current == (state, safe_detail) and health else occurred_at.isoformat()
+            )
+            success = state in {"AVAILABLE", "VALID", "CONNECTED"}
+            last_success = (
+                occurred_at.astimezone(UTC).isoformat()
+                if success
+                else (health[1] if health else None)
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO source_health VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    source,
+                    transition_at,
+                    occurred_at.astimezone(UTC).isoformat(),
+                    last_success,
+                    state,
+                    safe_detail,
+                    None if success else safe_detail,
+                ),
+            )
             if current == (state, safe_detail):
                 return False
             cursor = conn.execute(
@@ -414,6 +668,157 @@ class Store:
                 ),
             )
             return cursor.rowcount == 1
+
+    def source_health(self, source: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT source, transition_at_utc, heartbeat_at_utc, last_success_at_utc, "
+                "state, detail, last_error FROM source_health WHERE source=?",
+                (source,),
+            ).fetchone()
+        if row is None:
+            return None
+        fields = (
+            "source",
+            "transition_at_utc",
+            "heartbeat_at_utc",
+            "last_success_at_utc",
+            "state",
+            "detail",
+            "last_error",
+        )
+        return dict(zip(fields, row, strict=True))
+
+    def all_source_health(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT source, transition_at_utc, heartbeat_at_utc, last_success_at_utc, "
+                "state, detail, last_error FROM source_health ORDER BY source"
+            ).fetchall()
+        fields = (
+            "source",
+            "transition_at_utc",
+            "heartbeat_at_utc",
+            "last_success_at_utc",
+            "state",
+            "detail",
+            "last_error",
+        )
+        return [dict(zip(fields, row, strict=True)) for row in rows]
+
+    def source_is_eligible(
+        self, source: str, *, now: datetime, maximum_success_age_seconds: int
+    ) -> bool:
+        health = self.source_health(source)
+        if health is None or health["last_success_at_utc"] is None:
+            return False
+        verified = datetime.fromisoformat(health["last_success_at_utc"])
+        age = (now - verified).total_seconds()
+        return 0 <= age <= maximum_success_age_seconds
+
+    def journal_rest_candles(
+        self,
+        *,
+        source: str,
+        symbol: str,
+        resolution: str,
+        request_start: datetime,
+        request_end: datetime,
+        response_available_at: datetime,
+        candles: list,
+    ) -> str:
+        payload = json.dumps(
+            [candle.model_dump(mode="json") for candle in candles],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        identity = "|".join(
+            [
+                source,
+                symbol,
+                resolution,
+                request_start.astimezone(UTC).isoformat(),
+                request_end.astimezone(UTC).isoformat(),
+                response_available_at.astimezone(UTC).isoformat(),
+                digest,
+            ]
+        )
+        observation_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO rest_candle_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    observation_id,
+                    source,
+                    symbol,
+                    resolution,
+                    request_start.astimezone(UTC).isoformat(),
+                    request_end.astimezone(UTC).isoformat(),
+                    response_available_at.astimezone(UTC).isoformat(),
+                    digest,
+                    payload,
+                ),
+            )
+        return observation_id
+
+    def candidate_trade_events(
+        self, candidate: Candidate, *, through: datetime
+    ) -> list[RawMarketEvent]:
+        with self._conn() as conn:
+            watermark = conn.execute(
+                "SELECT received_at_utc, event_id FROM candidate_price_watermarks "
+                "WHERE candidate_id=?",
+                (candidate.candidate_id,),
+            ).fetchone()
+            received_at = (
+                watermark[0] if watermark else candidate.observed_at_utc.astimezone(UTC).isoformat()
+            )
+            event_id = watermark[1] if watermark else ""
+            rows = conn.execute(
+                "SELECT event_id, schema_version, venue, symbol, channel, event_time_utc, "
+                "received_at_utc, publish_time_utc, sequence, checksum, payload "
+                "FROM raw_market_events WHERE symbol=? AND channel='trades' "
+                "AND event_time_utc>=? AND received_at_utc<=? "
+                "AND (received_at_utc>? OR (received_at_utc=? AND event_id>?)) "
+                "ORDER BY received_at_utc, event_time_utc, event_id",
+                (
+                    candidate.symbol,
+                    candidate.observed_at_utc.astimezone(UTC).isoformat(),
+                    through.astimezone(UTC).isoformat(),
+                    received_at,
+                    received_at,
+                    event_id,
+                ),
+            ).fetchall()
+        return [
+            RawMarketEvent(
+                event_id=row[0],
+                schema_version=row[1],
+                venue=row[2],
+                symbol=row[3],
+                channel=row[4],
+                event_time_utc=datetime.fromisoformat(row[5]),
+                received_at_utc=datetime.fromisoformat(row[6]),
+                publish_time_utc=datetime.fromisoformat(row[7]) if row[7] else None,
+                sequence=row[8],
+                checksum=row[9],
+                payload=json.loads(row[10]),
+            )
+            for row in rows
+        ]
+
+    def advance_candidate_price_watermark(self, candidate_id: str, event: RawMarketEvent) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO candidate_price_watermarks VALUES (?, ?, ?, ?)",
+                (
+                    candidate_id,
+                    event.received_at_utc.astimezone(UTC).isoformat(),
+                    event.event_id,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
 
     def source_status_history(self, source: str | None = None) -> list[dict]:
         query = "SELECT event_id, occurred_at_utc, source, state, detail FROM source_status_events"
@@ -447,6 +852,760 @@ class Store:
             )
         return True
 
+    @staticmethod
+    def _record_revision_identity(conn: sqlite3.Connection, candidate: Candidate) -> str:
+        revision_id = candidate_revision_id(candidate)
+        observed_at = candidate.observed_at_utc.astimezone(UTC).isoformat()
+        conn.execute(
+            "INSERT OR IGNORE INTO candidate_revision_identities VALUES (?, ?, ?, ?, ?)",
+            (
+                revision_id,
+                candidate.candidate_id,
+                candidate.snapshot_id,
+                observed_at,
+                candidate.model_dump_json(),
+            ),
+        )
+        active = conn.execute(
+            "SELECT observed_at_utc FROM active_candidate_revisions WHERE candidate_id=?",
+            (candidate.candidate_id,),
+        ).fetchone()
+        if active is None:
+            conn.execute(
+                "INSERT INTO active_candidate_revisions VALUES (?, ?, ?, ?, 1)",
+                (candidate.candidate_id, revision_id, candidate.snapshot_id, observed_at),
+            )
+        elif observed_at > active[0]:
+            conn.execute(
+                "UPDATE active_candidate_revisions SET revision_id=?, snapshot_id=?, "
+                "observed_at_utc=?, generation=generation+1 WHERE candidate_id=?",
+                (revision_id, candidate.snapshot_id, observed_at, candidate.candidate_id),
+            )
+        return revision_id
+
+    def activate_candidate_revision(self, candidate_id: str, revision_id: str) -> int:
+        """Explicitly select a tied/new revision and return its eligibility generation."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT snapshot_id, observed_at_utc FROM candidate_revision_identities "
+                "WHERE candidate_id=? AND revision_id=?",
+                (candidate_id, revision_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Unknown candidate revision")
+            conn.execute(
+                "INSERT INTO active_candidate_revisions VALUES (?, ?, ?, ?, 1) "
+                "ON CONFLICT(candidate_id) DO UPDATE SET revision_id=excluded.revision_id, "
+                "snapshot_id=excluded.snapshot_id, observed_at_utc=excluded.observed_at_utc, "
+                "generation=active_candidate_revisions.generation+1",
+                (candidate_id, revision_id, row[0], row[1]),
+            )
+            generation = conn.execute(
+                "SELECT generation FROM active_candidate_revisions WHERE candidate_id=?",
+                (candidate_id,),
+            ).fetchone()
+        return int(generation[0])
+
+    def active_candidate_revision(self, candidate_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT revision_id, snapshot_id, observed_at_utc, generation "
+                "FROM active_candidate_revisions WHERE candidate_id=?",
+                (candidate_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "revision_id": row[0],
+            "snapshot_id": row[1],
+            "observed_at_utc": row[2],
+            "generation": int(row[3]),
+        }
+
+    def save_analysis_envelope(self, analysis: CanonicalAnalysis) -> bool:
+        with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT canonical_bytes FROM analysis_envelopes WHERE digest=?",
+                (analysis.digest,),
+            ).fetchone()
+            if existing is not None:
+                if bytes(existing[0]) != analysis.canonical_bytes:
+                    raise ValueError("Conflicting canonical bytes for analysis digest")
+                return False
+            conn.execute(
+                "INSERT INTO analysis_envelopes VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    analysis.digest,
+                    analysis.envelope.candidate_id,
+                    analysis.envelope.candidate_revision_id,
+                    analysis.envelope.snapshot_id,
+                    analysis.envelope.schema_version,
+                    analysis.canonical_bytes,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+        return True
+
+    def analysis_envelope_bytes(self, digest: str) -> bytes | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT canonical_bytes FROM analysis_envelopes WHERE digest=?", (digest,)
+            ).fetchone()
+        return bytes(row[0]) if row else None
+
+    def create_review_run(
+        self,
+        analysis: CanonicalAnalysis,
+        *,
+        provider_config: dict,
+        deadline_at: datetime,
+        now: datetime | None = None,
+    ) -> str:
+        now = now or datetime.now(UTC)
+        if deadline_at <= now:
+            raise ValueError("Review deadline must be in the future")
+        self.save_analysis_envelope(analysis)
+        config_json = json.dumps(provider_config, sort_keys=True, separators=(",", ":"))
+        identity = "|".join(
+            [
+                analysis.envelope.candidate_revision_id,
+                analysis.digest,
+                analysis.envelope.prompt_version,
+                config_json,
+            ]
+        )
+        run_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        job_id = hashlib.sha256(f"review-job|{run_id}".encode()).hexdigest()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR IGNORE INTO review_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    analysis.envelope.candidate_id,
+                    analysis.envelope.candidate_revision_id,
+                    analysis.digest,
+                    analysis.envelope.prompt_version,
+                    analysis.envelope.schema_version,
+                    analysis.envelope.risk_policy_version,
+                    config_json,
+                    "QUEUED",
+                    now.astimezone(UTC).isoformat(),
+                    deadline_at.astimezone(UTC).isoformat(),
+                ),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO review_jobs VALUES (?, ?, 'QUEUED', ?, NULL, NULL, 0, "
+                "NULL, ?, ?)",
+                (
+                    job_id,
+                    run_id,
+                    now.astimezone(UTC).isoformat(),
+                    now.astimezone(UTC).isoformat(),
+                    now.astimezone(UTC).isoformat(),
+                ),
+            )
+        return run_id
+
+    def claim_review_job(
+        self, owner: str, *, now: datetime, lease_seconds: int = 60
+    ) -> dict | None:
+        if not owner or lease_seconds < 1:
+            raise ValueError("Lease owner and positive duration are required")
+        now_text = now.astimezone(UTC).isoformat()
+        expires = (now + timedelta(seconds=lease_seconds)).astimezone(UTC).isoformat()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT job_id, run_id, lease_generation FROM review_jobs "
+                "WHERE available_at_utc<=? AND (status='QUEUED' OR "
+                "(status='CLAIMED' AND lease_expires_at_utc<?)) "
+                "ORDER BY created_at_utc, job_id LIMIT 1",
+                (now_text, now_text),
+            ).fetchone()
+            if row is None:
+                return None
+            generation = int(row[2]) + 1
+            changed = conn.execute(
+                "UPDATE review_jobs SET status='CLAIMED', lease_owner=?, "
+                "lease_expires_at_utc=?, lease_generation=?, updated_at_utc=? "
+                "WHERE job_id=? AND lease_generation=?",
+                (owner, expires, generation, now_text, row[0], row[2]),
+            )
+            if changed.rowcount != 1:
+                return None
+        return {
+            "job_id": row[0],
+            "run_id": row[1],
+            "owner": owner,
+            "generation": generation,
+            "lease_expires_at_utc": expires,
+        }
+
+    def mark_review_dispatched(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        generation: int,
+        dispatch_id: str,
+        now: datetime,
+    ) -> bool:
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE review_jobs SET status='DISPATCHED', dispatch_id=?, updated_at_utc=? "
+                "WHERE job_id=? AND status='CLAIMED' AND lease_owner=? "
+                "AND lease_generation=? AND lease_expires_at_utc>=?",
+                (
+                    dispatch_id,
+                    now.astimezone(UTC).isoformat(),
+                    job_id,
+                    owner,
+                    generation,
+                    now.astimezone(UTC).isoformat(),
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def review_run(self, run_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT candidate_id, revision_id, envelope_digest, prompt_version, "
+                "schema_version, risk_policy_version, provider_config_json, status, "
+                "created_at_utc, deadline_at_utc FROM review_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        fields = (
+            "candidate_id",
+            "revision_id",
+            "envelope_digest",
+            "prompt_version",
+            "schema_version",
+            "risk_policy_version",
+            "provider_config",
+            "status",
+            "created_at_utc",
+            "deadline_at_utc",
+        )
+        result = dict(zip(fields, row, strict=True))
+        result["provider_config"] = json.loads(result["provider_config"])
+        return result
+
+    def save_provider_result(
+        self,
+        *,
+        run_id: str,
+        job_id: str,
+        owner: str,
+        generation: int,
+        dispatch_id: str,
+        result: ProviderResult,
+    ) -> str | None:
+        attempt_id = hashlib.sha256(
+            f"{run_id}|{result.provider}|{result.attempt_number}|{dispatch_id}".encode()
+        ).hexdigest()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            lease = conn.execute(
+                "SELECT lease_owner, lease_generation FROM review_jobs "
+                "WHERE job_id=? AND run_id=? AND status IN ('CLAIMED', 'DISPATCHED')",
+                (job_id, run_id),
+            ).fetchone()
+            if lease != (owner, generation):
+                return None
+            try:
+                conn.execute(
+                    "INSERT INTO provider_attempts_v2 (attempt_id, run_id, provider, "
+                    "attempt_number, lease_generation, dispatch_id, requested_model, "
+                    "returned_model, status, started_at_utc, completed_at_utc, request_id, "
+                    "response_id, finish_reason, input_tokens, output_tokens, "
+                    "estimated_cost_microusd, actual_cost_microusd, failure_code, "
+                    "assessment_json, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        attempt_id,
+                        run_id,
+                        result.provider,
+                        result.attempt_number,
+                        generation,
+                        dispatch_id,
+                        result.requested_model,
+                        result.returned_model,
+                        result.status,
+                        result.started_at_utc.astimezone(UTC).isoformat(),
+                        result.completed_at_utc.astimezone(UTC).isoformat(),
+                        result.request_id,
+                        result.response_id,
+                        result.finish_reason,
+                        result.usage.input_tokens,
+                        result.usage.output_tokens,
+                        None,
+                        None,
+                        result.failure_code,
+                        result.assessment.model_dump_json() if result.assessment else None,
+                        json.dumps(dict(result.safe_metadata), sort_keys=True),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return None
+        return attempt_id
+
+    def provider_results(self, run_id: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT attempt_id, provider, attempt_number, requested_model, returned_model, "
+                "status, started_at_utc, completed_at_utc, request_id, response_id, "
+                "finish_reason, input_tokens, output_tokens, failure_code, assessment_json, "
+                "metadata_json FROM provider_attempts_v2 WHERE run_id=? "
+                "ORDER BY provider, attempt_number",
+                (run_id,),
+            ).fetchall()
+        fields = (
+            "attempt_id",
+            "provider",
+            "attempt_number",
+            "requested_model",
+            "returned_model",
+            "status",
+            "started_at_utc",
+            "completed_at_utc",
+            "request_id",
+            "response_id",
+            "finish_reason",
+            "input_tokens",
+            "output_tokens",
+            "failure_code",
+            "assessment",
+            "metadata",
+        )
+        results = [dict(zip(fields, row, strict=True)) for row in rows]
+        for result in results:
+            result["assessment"] = (
+                json.loads(result["assessment"]) if result["assessment"] else None
+            )
+            result["metadata"] = json.loads(result["metadata"])
+        return results
+
+    @staticmethod
+    def _eligibility_token_in_transaction(
+        conn: sqlite3.Connection, candidate_id_value: str
+    ) -> tuple[str, dict] | None:
+        active = conn.execute(
+            "SELECT a.revision_id, a.snapshot_id, a.generation, r.payload "
+            "FROM active_candidate_revisions a "
+            "JOIN candidate_revision_identities r ON r.revision_id=a.revision_id "
+            "WHERE a.candidate_id=?",
+            (candidate_id_value,),
+        ).fetchone()
+        if active is None:
+            return None
+        candidate = json.loads(active[3])
+        lifecycle = conn.execute(
+            "SELECT event_id, to_state, occurred_at_utc FROM candidate_lifecycle_events "
+            "WHERE candidate_id=? ORDER BY occurred_at_utc DESC, event_id DESC LIMIT 1",
+            (candidate_id_value,),
+        ).fetchone()
+        watermark = conn.execute(
+            "SELECT received_at_utc, event_id FROM candidate_price_watermarks WHERE candidate_id=?",
+            (candidate_id_value,),
+        ).fetchone()
+        sources = [
+            f"product_discovery:{candidate['asset']}",
+            f"candle_reconciliation:{candidate['symbol']}",
+            f"delta_book:{candidate['symbol']}",
+            "delta_websocket",
+        ]
+        health = []
+        for source in sources:
+            row = conn.execute(
+                "SELECT state, heartbeat_at_utc, last_success_at_utc FROM source_health "
+                "WHERE source=?",
+                (source,),
+            ).fetchone()
+            health.append((source, *(row or (None, None, None))))
+        book = conn.execute(
+            "SELECT updated_at_utc FROM book_checkpoints WHERE symbol=?",
+            (candidate["symbol"],),
+        ).fetchone()
+        latest_trade = conn.execute(
+            "SELECT received_at_utc, event_id FROM raw_market_events "
+            "WHERE symbol=? AND channel='trades' "
+            "ORDER BY received_at_utc DESC, event_id DESC LIMIT 1",
+            (candidate["symbol"],),
+        ).fetchone()
+        evidence = {
+            "candidate_id": candidate_id_value,
+            "revision_id": active[0],
+            "snapshot_id": active[1],
+            "generation": int(active[2]),
+            "lifecycle": lifecycle,
+            "price_watermark": watermark,
+            "source_health": health,
+            "book_checkpoint_at": book[0] if book else None,
+            "latest_trade": latest_trade,
+        }
+        token = hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return token, evidence
+
+    def eligibility_token(self, candidate_id_value: str) -> tuple[str, dict] | None:
+        with self._conn() as conn:
+            return self._eligibility_token_in_transaction(conn, candidate_id_value)
+
+    def commit_consensus_decision_and_outbox(
+        self,
+        decision: ConsensusDecisionV2,
+        *,
+        destination_id: str | None = None,
+    ) -> bool:
+        """Conditionally commit a revision decision and its alert intent in one transaction."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._eligibility_token_in_transaction(conn, decision.candidate_id)
+            if current is None:
+                return False
+            token, evidence = current
+            lifecycle = evidence["lifecycle"]
+            if (
+                token != decision.eligibility.eligibility_token
+                or evidence["revision_id"] != decision.candidate_revision_id
+                or evidence["generation"] != decision.eligibility.active_revision_generation
+                or lifecycle is None
+                or lifecycle[1] != decision.eligibility.lifecycle_state
+            ):
+                return False
+            try:
+                conn.execute(
+                    "INSERT INTO consensus_decisions_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        decision.decision_id,
+                        decision.run_id,
+                        decision.candidate_id,
+                        decision.candidate_revision_id,
+                        decision.envelope_digest,
+                        decision.status,
+                        decision.decided_at_utc.astimezone(UTC).isoformat(),
+                        decision.model_dump_json(),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing = conn.execute(
+                    "SELECT payload FROM consensus_decisions_v2 WHERE run_id=?",
+                    (decision.run_id,),
+                ).fetchone()
+                return existing is not None and existing[0] == decision.model_dump_json()
+            if decision.status == "CONFIRMED":
+                if not destination_id:
+                    raise ValueError("Confirmed decision requires an alert destination identity")
+                delivery_key = hashlib.sha256(
+                    (
+                        f"{decision.decision_id}|{decision.candidate_revision_id}|"
+                        f"CONFIRMED|{destination_id}"
+                    ).encode()
+                ).hexdigest()
+                outbox_id = hashlib.sha256(f"outbox|{delivery_key}".encode()).hexdigest()
+                now_text = decision.decided_at_utc.astimezone(UTC).isoformat()
+                envelope_row = conn.execute(
+                    "SELECT canonical_bytes FROM analysis_envelopes WHERE digest=?",
+                    (decision.envelope_digest,),
+                ).fetchone()
+                if envelope_row is None:
+                    raise ValueError("Confirmed decision is missing its canonical envelope")
+                envelope = json.loads(bytes(envelope_row[0]))
+                alert_payload = {
+                    "schema_version": "1",
+                    "decision_id": decision.decision_id,
+                    "candidate_id": decision.candidate_id,
+                    "candidate_revision_id": decision.candidate_revision_id,
+                    "event_type": "CONFIRMED",
+                    "symbol": envelope["symbol"],
+                    "venue": envelope["venue"],
+                    "asset": envelope["asset"],
+                    "direction": envelope["direction"],
+                    "horizon_minutes": envelope["horizon_minutes"],
+                    "entry": envelope["entry"],
+                    "invalidation": envelope["invalidation"],
+                    "targets": [
+                        {"index": index, "price": envelope["targets"][index - 1]}
+                        for index in decision.supported_target_indices
+                    ],
+                    "market_observed_at_utc": envelope["observed_at_utc"],
+                    "reviewed_at_utc": decision.decided_at_utc.astimezone(UTC).isoformat(),
+                    "expires_at_utc": envelope["expires_at_utc"],
+                    "meaning": (
+                        "Research review checks passed; not an order, probability, guarantee, "
+                        "or trading advice."
+                    ),
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO notification_outbox VALUES (?, ?, ?, ?, ?, ?, ?, "
+                    "'PENDING', ?, 0, ?, NULL, NULL, 0, NULL, NULL, ?, ?)",
+                    (
+                        outbox_id,
+                        decision.decision_id,
+                        decision.candidate_id,
+                        decision.candidate_revision_id,
+                        "CONFIRMED",
+                        destination_id,
+                        delivery_key,
+                        json.dumps(alert_payload, sort_keys=True, separators=(",", ":")),
+                        now_text,
+                        now_text,
+                        now_text,
+                    ),
+                )
+        return True
+
+    def consensus_decision_v2(self, run_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM consensus_decisions_v2 WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def outbox_items(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT outbox_id, decision_id, candidate_id, revision_id, event_type, "
+                "destination_id, delivery_key, status, payload, attempts, available_at_utc, "
+                "receipt_id, last_error FROM notification_outbox ORDER BY created_at_utc"
+            ).fetchall()
+        fields = (
+            "outbox_id",
+            "decision_id",
+            "candidate_id",
+            "revision_id",
+            "event_type",
+            "destination_id",
+            "delivery_key",
+            "status",
+            "payload",
+            "attempts",
+            "available_at_utc",
+            "receipt_id",
+            "last_error",
+        )
+        result = [dict(zip(fields, row, strict=True)) for row in rows]
+        for item in result:
+            item["payload"] = json.loads(item["payload"])
+        return result
+
+    def claim_outbox_item(self, owner: str, *, now: datetime, lease_seconds: int) -> dict | None:
+        now_text = now.astimezone(UTC).isoformat()
+        lease_until = (now + timedelta(seconds=lease_seconds)).astimezone(UTC).isoformat()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT outbox_id, decision_id, candidate_id, revision_id, event_type, "
+                "destination_id, delivery_key, payload, attempts, lease_generation "
+                "FROM notification_outbox WHERE available_at_utc<=? AND "
+                "(status IN ('PENDING', 'RETRY') OR "
+                "(status='CLAIMED' AND lease_expires_at_utc<?)) "
+                "ORDER BY available_at_utc, created_at_utc LIMIT 1",
+                (now_text, now_text),
+            ).fetchone()
+            if row is None:
+                return None
+            generation = int(row[9]) + 1
+            cursor = conn.execute(
+                "UPDATE notification_outbox SET status='CLAIMED', lease_owner=?, "
+                "lease_expires_at_utc=?, lease_generation=?, updated_at_utc=? "
+                "WHERE outbox_id=? AND lease_generation=?",
+                (owner, lease_until, generation, now_text, row[0], row[9]),
+            )
+            if cursor.rowcount != 1:
+                return None
+        return {
+            "outbox_id": row[0],
+            "decision_id": row[1],
+            "candidate_id": row[2],
+            "revision_id": row[3],
+            "event_type": row[4],
+            "destination_id": row[5],
+            "delivery_key": row[6],
+            "payload": json.loads(row[7]),
+            "attempts": int(row[8]),
+            "owner": owner,
+            "generation": generation,
+        }
+
+    def outbox_delivery_eligible(self, item: dict, *, now: datetime) -> tuple[bool, str]:
+        with self._conn() as conn:
+            active = conn.execute(
+                "SELECT revision_id FROM active_candidate_revisions WHERE candidate_id=?",
+                (item["candidate_id"],),
+            ).fetchone()
+            lifecycle = conn.execute(
+                "SELECT event_id, to_state FROM candidate_lifecycle_events WHERE candidate_id=? "
+                "ORDER BY occurred_at_utc DESC, event_id DESC LIMIT 1",
+                (item["candidate_id"],),
+            ).fetchone()
+        if active is None or active[0] != item["revision_id"]:
+            return False, "candidate revision is no longer active"
+        if item["event_type"] == "CONFIRMED":
+            if lifecycle is None or lifecycle[1] != "CANDIDATE":
+                return False, "candidate lifecycle is terminal or unavailable"
+            if now >= datetime.fromisoformat(item["payload"]["expires_at_utc"]):
+                return False, "candidate expired before delivery"
+        elif (
+            lifecycle is None
+            or lifecycle[0] != item["payload"].get("lifecycle_event_id")
+            or lifecycle[1] != item["event_type"]
+        ):
+            return False, "terminal lifecycle intent is no longer current"
+        return True, "eligible"
+
+    def finish_outbox_attempt(
+        self,
+        item: dict,
+        *,
+        status: str,
+        now: datetime,
+        receipt_id: str | None = None,
+        error: str | None = None,
+        retry_at: datetime | None = None,
+    ) -> bool:
+        if status not in {"SENT", "RETRY", "FAILED", "SUPPRESSED", "RECEIPT_UNKNOWN"}:
+            raise ValueError("Invalid outbox completion status")
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE notification_outbox SET status=?, attempts=attempts+1, "
+                "available_at_utc=?, lease_owner=NULL, lease_expires_at_utc=NULL, "
+                "receipt_id=?, last_error=?, updated_at_utc=? WHERE outbox_id=? "
+                "AND status='CLAIMED' AND lease_owner=? AND lease_generation=?",
+                (
+                    status,
+                    (retry_at or now).astimezone(UTC).isoformat(),
+                    receipt_id,
+                    error[:500] if error else None,
+                    now.astimezone(UTC).isoformat(),
+                    item["outbox_id"],
+                    item["owner"],
+                    item["generation"],
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def complete_review_job(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        generation: int,
+        status: str,
+        now: datetime,
+    ) -> bool:
+        if status not in {"COMPLETED", "WAIT", "FAILED", "DISPATCH_UNKNOWN"}:
+            raise ValueError("Invalid terminal review job status")
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                "UPDATE review_jobs SET status=?, lease_owner=NULL, lease_expires_at_utc=NULL, "
+                "updated_at_utc=? WHERE job_id=? AND lease_owner=? AND lease_generation=?",
+                (
+                    status,
+                    now.astimezone(UTC).isoformat(),
+                    job_id,
+                    owner,
+                    generation,
+                ),
+            )
+            if cursor.rowcount == 1:
+                conn.execute(
+                    "UPDATE review_runs SET status=? WHERE run_id=(SELECT run_id FROM review_jobs "
+                    "WHERE job_id=?)",
+                    (status, job_id),
+                )
+        return cursor.rowcount == 1
+
+    def reserve_provider_budget(
+        self,
+        *,
+        run_id: str,
+        provider: str,
+        attempt_number: int,
+        now: datetime,
+        input_tokens: int,
+        output_tokens: int,
+        cost_microusd: int,
+        provider_call_limit: int,
+        total_call_limit: int,
+        total_cost_limit_microusd: int,
+    ) -> str | None:
+        if min(input_tokens, output_tokens, cost_microusd) < 0:
+            raise ValueError("Budget reservations cannot be negative")
+        day = now.astimezone(UTC).date().isoformat()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            provider_calls = conn.execute(
+                "SELECT COALESCE(SUM(reserved_calls), 0) FROM budget_ledger "
+                "WHERE day_utc=? AND provider=?",
+                (day, provider),
+            ).fetchone()[0]
+            totals = conn.execute(
+                "SELECT COALESCE(SUM(reserved_calls), 0), "
+                "COALESCE(SUM(reserved_cost_microusd), 0) FROM budget_ledger WHERE day_utc=?",
+                (day,),
+            ).fetchone()
+            if (
+                int(provider_calls) + 1 > provider_call_limit
+                or int(totals[0]) + 1 > total_call_limit
+                or int(totals[1]) + cost_microusd > total_cost_limit_microusd
+            ):
+                return None
+            reservation_id = uuid.uuid4().hex
+            try:
+                conn.execute(
+                    "INSERT INTO budget_ledger VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, "
+                    "NULL, NULL, 'RESERVED', ?, NULL)",
+                    (
+                        reservation_id,
+                        day,
+                        run_id,
+                        provider,
+                        attempt_number,
+                        input_tokens,
+                        output_tokens,
+                        cost_microusd,
+                        now.astimezone(UTC).isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return None
+        return reservation_id
+
+    def reconcile_provider_budget(
+        self,
+        reservation_id: str,
+        *,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        actual_cost_microusd: int | None,
+        status: str,
+        now: datetime,
+    ) -> bool:
+        if status not in {"RECONCILED", "USAGE_UNKNOWN"}:
+            raise ValueError("Invalid budget reconciliation status")
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE budget_ledger SET actual_input_tokens=?, actual_output_tokens=?, "
+                "actual_cost_microusd=?, status=?, reconciled_at_utc=? "
+                "WHERE reservation_id=? AND status='RESERVED'",
+                (
+                    input_tokens,
+                    output_tokens,
+                    actual_cost_microusd,
+                    status,
+                    now.astimezone(UTC).isoformat(),
+                    reservation_id,
+                ),
+            )
+        return cursor.rowcount == 1
+
     def add_candidate(self, candidate: Candidate) -> bool:
         with self._conn() as conn:
             cursor = conn.execute(
@@ -469,6 +1628,7 @@ class Store:
                     candidate.model_dump_json(),
                 ),
             )
+            self._record_revision_identity(conn, candidate)
             return cursor.rowcount == 1
 
     def add_candidate_with_lifecycle(
@@ -503,6 +1663,7 @@ class Store:
                     candidate.model_dump_json(),
                 ),
             )
+            self._record_revision_identity(conn, candidate)
             lifecycle_exists = conn.execute(
                 "SELECT 1 FROM candidate_lifecycle_events WHERE candidate_id=? LIMIT 1",
                 (candidate.candidate_id,),
@@ -573,6 +1734,52 @@ class Store:
                     event.model_dump_json(),
                 ),
             )
+            if cursor.rowcount == 1 and event.to_state.value in {"INVALIDATED", "EXPIRED"}:
+                confirmations = conn.execute(
+                    "SELECT decision_id, revision_id, destination_id, payload "
+                    "FROM notification_outbox WHERE candidate_id=? AND event_type='CONFIRMED'",
+                    (event.candidate_id,),
+                ).fetchall()
+                for decision_id, revision_id, destination_id, payload_json in confirmations:
+                    payload = json.loads(payload_json)
+                    delivery_key = hashlib.sha256(
+                        (
+                            f"{decision_id}|{revision_id}|{event.to_state.value}|"
+                            f"{event.event_id}|{destination_id}"
+                        ).encode()
+                    ).hexdigest()
+                    outbox_id = hashlib.sha256(f"outbox|{delivery_key}".encode()).hexdigest()
+                    now_text = event.occurred_at_utc.astimezone(UTC).isoformat()
+                    payload.update(
+                        {
+                            "event_type": event.to_state.value,
+                            "lifecycle_event_id": event.event_id,
+                            "lifecycle_reason": event.reason,
+                            "lifecycle_at_utc": now_text,
+                            "source_event_id": event.source_event_id,
+                            "meaning": (
+                                "The prior research confirmation is no longer active; this is "
+                                "not an order or trading advice."
+                            ),
+                        }
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO notification_outbox VALUES (?, ?, ?, ?, ?, ?, ?, "
+                        "'PENDING', ?, 0, ?, NULL, NULL, 0, NULL, NULL, ?, ?)",
+                        (
+                            outbox_id,
+                            decision_id,
+                            event.candidate_id,
+                            revision_id,
+                            event.to_state.value,
+                            destination_id,
+                            delivery_key,
+                            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                            now_text,
+                            now_text,
+                            now_text,
+                        ),
+                    )
             return cursor.rowcount == 1
 
     def candidate_lifecycle(self, candidate_id: str) -> list[CandidateLifecycleEvent]:
@@ -602,15 +1809,10 @@ class Store:
         with self._conn() as conn:
             rows = conn.execute(
                 f"""
-                SELECT COALESCE(
-                    (
-                        SELECT r.payload FROM candidate_revisions r
-                        WHERE r.candidate_id=c.candidate_id
-                        ORDER BY r.observed_at_utc DESC, r.snapshot_id DESC LIMIT 1
-                    ),
-                    c.payload
-                )
+                SELECT r.payload
                 FROM candidates c
+                JOIN active_candidate_revisions a ON a.candidate_id=c.candidate_id
+                JOIN candidate_revision_identities r ON r.revision_id=a.revision_id
                 JOIN candidate_lifecycle_events e
                   ON e.event_id = (
                     SELECT latest.event_id
@@ -689,30 +1891,147 @@ class Store:
             dict(zip(("service", "updated_at", "state", "detail"), r, strict=True)) for r in rows
         ]
 
-    def recent_candidates(self, limit: int = 50) -> list[dict]:
+    def recent_candidates(self, limit: int = 50, offset: int = 0) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
                 """
-                SELECT COALESCE(
-                    (
-                        SELECT r.payload FROM candidate_revisions r
-                        WHERE r.candidate_id=c.candidate_id
-                        ORDER BY r.observed_at_utc DESC, r.snapshot_id DESC LIMIT 1
-                    ),
-                    c.payload
-                ), d.payload
-                FROM candidates c LEFT JOIN decisions d ON c.candidate_id = d.candidate_id
-                ORDER BY c.created_at DESC LIMIT ?
+                SELECT r.payload, a.revision_id,
+                (
+                    SELECT d2.payload FROM consensus_decisions_v2 d2
+                    WHERE d2.candidate_id=c.candidate_id AND d2.revision_id=a.revision_id
+                    ORDER BY d2.decided_at_utc DESC, d2.decision_id DESC LIMIT 1
+                ),
+                (
+                    SELECT e.to_state FROM candidate_lifecycle_events e
+                    WHERE e.candidate_id=c.candidate_id
+                    ORDER BY e.occurred_at_utc DESC, e.event_id DESC LIMIT 1
+                ),
+                (
+                    SELECT e.reason FROM candidate_lifecycle_events e
+                    WHERE e.candidate_id=c.candidate_id
+                    ORDER BY e.occurred_at_utc DESC, e.event_id DESC LIMIT 1
+                ),
+                (
+                    SELECT e.occurred_at_utc FROM candidate_lifecycle_events e
+                    WHERE e.candidate_id=c.candidate_id
+                    ORDER BY e.occurred_at_utc DESC, e.event_id DESC LIMIT 1
+                )
+                FROM candidates c
+                JOIN active_candidate_revisions a ON a.candidate_id=c.candidate_id
+                JOIN candidate_revision_identities r ON r.revision_id=a.revision_id
+                ORDER BY c.created_at DESC LIMIT ? OFFSET ?
             """,
-                (min(max(limit, 1), 200),),
+                (min(max(limit, 1), 200), max(offset, 0)),
             ).fetchall()
-        return [
+        output = [
             {
                 "candidate": json.loads(candidate),
+                "candidate_revision_id": revision_id,
                 "consensus": json.loads(decision) if decision else None,
+                "current_lifecycle_state": lifecycle_state,
+                "current_lifecycle_reason": lifecycle_reason,
+                "current_lifecycle_at_utc": lifecycle_at,
             }
-            for candidate, decision in rows
+            for (
+                candidate,
+                revision_id,
+                decision,
+                lifecycle_state,
+                lifecycle_reason,
+                lifecycle_at,
+            ) in rows
         ]
+        for item in output:
+            item["review"] = self.review_summary(
+                item["candidate"]["candidate_id"], item["candidate_revision_id"]
+            )
+        return output
+
+    def review_summary(self, candidate_id: str, revision_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT run_id, status, created_at_utc, deadline_at_utc, envelope_digest "
+                "FROM review_runs WHERE candidate_id=? AND revision_id=? "
+                "ORDER BY created_at_utc DESC, run_id DESC LIMIT 1",
+                (candidate_id, revision_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": row[0],
+            "status": row[1],
+            "created_at_utc": row[2],
+            "deadline_at_utc": row[3],
+            "envelope_digest": row[4],
+            "attempts": self.provider_results(row[0]),
+        }
+
+    def budget_status(self, *, now: datetime | None = None) -> dict:
+        now = now or datetime.now(UTC)
+        day = now.astimezone(UTC).date().isoformat()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(reserved_calls), 0), "
+                "COALESCE(SUM(reserved_cost_microusd), 0), "
+                "COALESCE(SUM(actual_cost_microusd), 0), "
+                "SUM(CASE WHEN status='USAGE_UNKNOWN' THEN 1 ELSE 0 END) "
+                "FROM budget_ledger WHERE day_utc=?",
+                (day,),
+            ).fetchone()
+        return {
+            "day_utc": day,
+            "reserved_calls": int(row[0] or 0),
+            "reserved_cost_microusd": int(row[1] or 0),
+            "reported_actual_cost_microusd": int(row[2] or 0),
+            "usage_unknown_count": int(row[3] or 0),
+        }
+
+    def queue_status(self, *, now: datetime | None = None) -> dict:
+        now = now or datetime.now(UTC)
+        now_text = now.astimezone(UTC).isoformat()
+        with self._conn() as conn:
+            review_rows = conn.execute(
+                "SELECT status, COUNT(*) FROM review_jobs GROUP BY status"
+            ).fetchall()
+            stale_review_leases = conn.execute(
+                "SELECT COUNT(*) FROM review_jobs WHERE status='CLAIMED' "
+                "AND lease_expires_at_utc<?",
+                (now_text,),
+            ).fetchone()[0]
+            alert_rows = conn.execute(
+                "SELECT status, COUNT(*) FROM notification_outbox GROUP BY status"
+            ).fetchall()
+            stale_alert_leases = conn.execute(
+                "SELECT COUNT(*) FROM notification_outbox WHERE status='CLAIMED' "
+                "AND lease_expires_at_utc<?",
+                (now_text,),
+            ).fetchone()[0]
+        return {
+            "review_jobs": {status: int(count) for status, count in review_rows},
+            "stale_review_leases": int(stale_review_leases),
+            "alert_items": {status: int(count) for status, count in alert_rows},
+            "stale_alert_leases": int(stale_alert_leases),
+        }
+
+    def migration_ids(self) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT migration_id FROM schema_migrations ORDER BY migration_id"
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def backup_to(self, destination: Path) -> None:
+        """Create a transactionally consistent SQLite backup and verify its integrity."""
+        destination = Path(destination).resolve()
+        source = self.path.resolve()
+        if destination == source:
+            raise ValueError("Backup destination must differ from the live database")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with self._conn() as source_conn, sqlite3.connect(destination) as backup_conn:
+            source_conn.backup(backup_conn)
+            result = backup_conn.execute("PRAGMA integrity_check").fetchone()
+            if result is None or result[0] != "ok":
+                raise RuntimeError("SQLite backup integrity check failed")
 
     def last_engine_states(self, engines: list[EngineDescriptor]) -> list[dict]:
         output: list[dict] = []

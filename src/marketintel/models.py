@@ -87,6 +87,8 @@ class DeltaProduct(BaseModel):
 class Instrument(BaseModel):
     """Validated market metadata used when normalizing contract quantities."""
 
+    model_config = ConfigDict(frozen=True)
+
     schema_version: Literal["1"] = "1"
     venue: Literal["delta_india"] = "delta_india"
     product_id: int = Field(gt=0)
@@ -333,10 +335,41 @@ class ExternalMetric(BaseModel):
         return self
 
 
+class CoverageWindow(BaseModel):
+    """Point-in-time coverage facts; incomplete windows are never relabelled complete."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: Literal["TRIGGER", "UTC_SESSION", "PREVIOUS_UTC_DAY"]
+    required: bool
+    complete: bool
+    expected_start_utc: datetime
+    expected_end_utc: datetime
+    actual_start_utc: datetime | None = None
+    actual_end_utc: datetime | None = None
+    candle_count: int = Field(default=0, ge=0)
+    reason: str = ""
+
+    @model_validator(mode="after")
+    def timestamps_are_aware(self) -> "CoverageWindow":
+        values = [
+            self.expected_start_utc,
+            self.expected_end_utc,
+            self.actual_start_utc,
+            self.actual_end_utc,
+        ]
+        if any(
+            value is not None and (value.tzinfo is None or value.utcoffset() is None)
+            for value in values
+        ):
+            raise ValueError("Coverage timestamps must be timezone aware")
+        return self
+
+
 class FeatureSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1"] = "1"
+    schema_version: Literal["1", "2"] = "2"
     snapshot_id: str = Field(min_length=32)
     asset: Literal["GOLD", "BTC"]
     symbol: str
@@ -352,6 +385,7 @@ class FeatureSnapshot(BaseModel):
     book: BookFeatures
     volatility: VolatilityBudget
     vwap: Decimal | None = Field(default=None, gt=0)
+    coverage: tuple[CoverageWindow, ...] = ()
     source_quality: Literal["FRESH", "STALE", "INCOMPLETE"]
     warnings: tuple[str, ...] = ()
     external_metrics: tuple[ExternalMetric, ...] = ()
@@ -360,7 +394,7 @@ class FeatureSnapshot(BaseModel):
 class CandidateLifecycleEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1"] = "1"
+    schema_version: Literal["1", "2"] = "2"
     event_id: str = Field(min_length=16)
     candidate_id: str = Field(min_length=16)
     snapshot_id: str = Field(min_length=16)
@@ -368,6 +402,9 @@ class CandidateLifecycleEvent(BaseModel):
     to_state: SignalState
     occurred_at_utc: datetime
     reason: str
+    price_source: Literal["EXECUTED_TRADE", "BID_ASK", "CLOSED_CANDLE", "NONE"] = "NONE"
+    price_policy_version: str = "m3a-price-v1"
+    source_event_id: str | None = None
 
     @model_validator(mode="after")
     def lifecycle_timestamp_is_aware(self) -> "CandidateLifecycleEvent":
@@ -408,7 +445,7 @@ class CandidateSignal(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1"] = "1"
+    schema_version: Literal["1", "2"] = "2"
     candidate_id: str
     snapshot_id: str
     asset: Literal["GOLD", "BTC"]
@@ -424,9 +461,9 @@ class CandidateSignal(BaseModel):
     trigger: str
     entry: float = Field(gt=0)
     invalidation: float = Field(gt=0)
-    targets: list[float] = Field(min_length=1)
-    feature_evidence: list[str]
-    counter_evidence: list[str] = Field(default_factory=list)
+    targets: tuple[float, ...] = Field(min_length=1)
+    feature_evidence: tuple[str, ...]
+    counter_evidence: tuple[str, ...] = ()
     explanation: str = "Deterministic research candidate; NOT AI CONFIRMED"
     source_quality: Literal["FRESH", "STALE", "INCOMPLETE"] = "FRESH"
     rule_version: str = "breakout-v0.1"

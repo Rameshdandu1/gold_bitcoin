@@ -46,31 +46,38 @@ does not establish live signal accuracy, profitability or
 provider availability. CoinGlass subscription calls and a licensed Gold reference remain external
 operator validation items.
 
-**Independent review gate (2026-11-21):** the passing 126-test baseline does not close M2
+**Independent review gate (2026-11-21):** the historical 126-test baseline did not close M2
 correctness acceptance. [The review](audits/phase-2-independent-review.md) reproduced R1–R6 and
-identified canonical/revision contracts that must be hardened before AI promotion. Phase 3A below
-owns that corrective work; completed implementation checkboxes above do not imply those findings
-are fixed.
+identified canonical/revision contracts that became the Phase 3 entry gate. Those findings are now
+corrected and regression-tested; see [the Phase 3 verification report](audits/phase-3-verification.md).
 
 ## Phase 3 — dual-model and hardened service
-
-11. Guarded GPT and Claude structured responses with timeout, token ceilings, cached idempotence, retry caps, budget monitor, response/version audit.
-12. Independent evaluations on immutable snapshots; no chain-of-thought request; compare explicit target-index overlap, invalidation agreement and hard risk checks. Emergency WAIT if either provider fails.
-13. Auth, TLS reverse proxy, key rotation, Windows Services/Task Scheduler for restart, OS firewall, ingestion tracing and error alerts.
-14. Slack/Telegram notifications with exact trigger/target/stop/source timestamp, dedup and expiry; never transmit secrets.
+- [x] Correct R1–R6: full session/previous-day acquisition, first-break structure identity, common
+  candle availability, executed-event breach persistence, continuing discovery/reconciliation gates
+  and accurate current lifecycle projection.
+- [x] Canonical deeply immutable analysis bytes; revision-scoped envelopes, runs, leased jobs,
+  provider attempts, decisions, migrations, persistent budgets and restore verification.
+- [x] Independent concurrent OpenAI/Anthropic structured adapters with actual response metadata,
+  bounded deadlines/retries and typed fail-closed provider outcomes. Missing verified pricing
+  prevents paid dispatch.
+- [x] Fresh post-review revision, lifecycle, time, trade, stop/target, source, book, spread, drift,
+  fee/slippage and net reward/risk gates; decision and Slack intent commit atomically.
+- [x] Authenticated bounded API/UI; Slack outbox worker, terminal event identities, durable delivery
+  states; native Windows startup/check/backup instructions. Installation, live delivery and provider
+  account/model access remain external verification items.
 
 Implementation order and acceptance details are in [CODEX_PHASE_3.md](../prompts/CODEX_PHASE_3.md):
 
-- [ ] **3A:** fix session coverage, consumed structure events, candle availability, live price
+- [x] **3A:** fix session coverage, consumed structure events, candle availability, live price
   invalidation, discovery admission policy and lifecycle presentation; journal REST observations
   and define required reconciliation health.
-- [ ] **3B:** deeply immutable canonical evidence and exact bytes/digest; revision-scoped durable
+- [x] **3B:** deeply immutable canonical evidence and exact bytes/digest; revision-scoped durable
   review jobs, attempts, decisions, budgets and migrations.
-- [ ] **3C:** independent concurrent GPT/Claude structured review, actual provider metadata,
+- [x] **3C:** independent concurrent GPT/Claude structured review, actual provider metadata,
   bounded deadlines/retries, strict validation, material-change idempotence and spend accounting.
-- [ ] **3D:** deterministic consensus plus current-price/source/lifecycle recheck; atomic decision
+- [x] **3D:** deterministic consensus plus current-price/source/lifecycle recheck; atomic decision
   and outbox commit against the active revision.
-- [ ] **3E:** accurate authenticated API/dashboard, one complete notification channel adapter,
+- [x] **3E:** accurate authenticated API/dashboard, one complete notification channel adapter,
   durable delivery state and Windows operation/recovery instructions.
 
 AI and outbound alerts remain disabled by default. Fixture completion, paid-provider smoke tests,
@@ -89,5 +96,7 @@ Windows deployment and strategy-performance validation are separate evidence cat
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
-- M3: both AI providers independently return validated schema and failures fail closed.
+- M3: implemented and fixture-verified. Live provider/model entitlement, paid-call behavior, Slack
+  delivery, Windows Task Scheduler installation and extended market soak remain explicit operator
+  acceptance gates; passing fixtures are not a strategy-performance claim.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.

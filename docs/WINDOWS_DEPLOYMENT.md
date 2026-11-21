@@ -1,10 +1,13 @@
-# Windows Server Deployment — staged runbook
+# Native Windows operation and recovery
 
-## 0. Scope and prerequisites
-For a Windows Server 2022/2025 VPS or bare-metal host, start with **native Python + SQLite** only for MVP research and a small dataset; **no Linux VM** is mandatory. Install official Python 3.12+, Node 20+/22, Git. Use an unprivileged local service identity and a dedicated directory, e.g. `C:\MarketIntelligence`. This guide does NOT promise 24/7 production hardening.
+This is a staged single-host research runbook for Windows Server 2022/2025. It does not claim that a
+Windows service installation, external provider, live feed soak, Slack delivery or deployment was
+performed during Phase 3 development.
 
-## 1. Local setup
-In PowerShell:
+## 1. Install and verify
+
+Use Python 3.12+, Node 20+/22 and Git under an unprivileged local identity. Keep the checkout, `.env`,
+SQLite and backups in ACL-restricted directories. Confirm Windows Time is synchronized.
 
 ```powershell
 Set-Location C:\MarketIntelligence
@@ -16,48 +19,106 @@ notepad .env
 .\scripts\verify.ps1
 ```
 
-Edit only the `.env` copy. Do not use command-line flags or screenshots to paste secrets. Windows ACLs: deny non-service users read access to `.env` and `data`. Confirm NTP clock synchronization and timezone; app keeps UTC timestamps irrespective of host timezone.
+Set unique `OPERATOR_USERNAME`/`OPERATOR_PASSWORD`. Leave ingestion, AI and alerts false initially.
+AI additionally requires two explicit model IDs/keys, verified non-zero pricing and spend caps,
+fee/slippage assumptions and Slack destination/token. Credentials alone are not permission for a
+paid smoke test. The project contains no exchange key or order setting.
 
-## 2. Start API and collector manually first
+## 2. Manual staged startup
+
+Run each foreground command in a separate PowerShell window. They exit without external work when
+their feature flag is false.
 
 ```powershell
 .\scripts\start-api.ps1
-# second PowerShell terminal:
 .\scripts\start-worker.ps1
+.\scripts\start-review-worker.ps1
+.\scripts\start-alert-worker.ps1
 ```
 
-Before enabling worker set `LIVE_INGESTION_ENABLED=true` and check configured symbols are supported
-by the current Delta India `/v2/products` result. Enable CoinGlass only after confirming the declared
-`COINGLASS_PLAN`, supported pairs, license and a bounded request budget. Phase 2 always stops after
-persisting deterministic candidates; it does not call AI, alert, or execution paths even if
-`AI_ENABLED` is set. A `CANDIDATE` is research output, not a confirmed signal.
-
-## 3. Frontend
+The API binds to `127.0.0.1:8000`. Check it without putting credentials in a URL:
 
 ```powershell
-Set-Location C:\MarketIntelligence\frontend
-npm install
-npm run typecheck
-npm run build
+$env:OPERATOR_USERNAME = 'local-operator'
+$env:OPERATOR_PASSWORD = Read-Host 'Operator password'
+.\scripts\check-service.ps1
 ```
 
-Vite dev server is **not** a public production web server. Serve compiled `frontend/dist` behind an authenticated HTTPS reverse proxy (IIS/ARR or another supported server) and proxy `/api` securely to `127.0.0.1:8000`. Lock CORS and add application login prior to publishing a URL. HTTPS certificates and access control are operator tasks.
+`/healthz` proves only that the API process runs. `/readyz` separately reports migrations, auth,
+market-worker heartbeat/source age, provider/alert configuration, queue leases and UTC-day budget.
+It never calls a paid provider.
 
-## 4. Windows service management
-For a durable server, configure each Python process as an independently managed Windows Service with an approved service wrapper (for example, a reviewed WinSW or NSSM release). Do not start a GUI desktop process and assume it survives logout. Set explicit working directory, auto restart/recovery, non-admin identity, log rotation, separate service accounts, and Windows Defender Firewall block rules. Confirm a full host reboot recovers both processes; do a dry-run before going live.
+## 3. HTTPS and browser access
 
-## 5. Storage and throughput
-SQLite WAL is for small single-node research and audit only. Do not attempt to persist high-frequency raw L2 tick floods in SQLite at scale. If the raw event journal grows, migrate to PostgreSQL for Windows and separate compressed archived partitions (or a Linux VM for TimescaleDB if vendor support requires it). Record daily raw byte rates and retention, back up encrypted data off-host and test restore.
+Do not expose port 8000. Put IIS/ARR or another reviewed reverse proxy on the same host, terminate
+HTTPS there and proxy only to `127.0.0.1:8000`. Permit only the expected host/origin and do not pass
+or trust arbitrary identity headers. Restrict inbound firewall rules to the operator VPN/network.
+Compiled `frontend/dist` is served by the authenticated backend. Basic authentication is acceptable
+only through this encrypted boundary.
 
-## 6. Readiness checklist
-- [ ] Windows patching, anti-malware, NTP and least-privilege local accounts configured
-- [ ] No exposed unauthenticated API or Vite dev service
-- [ ] API keys masked and rotated; firewall outbound domains reviewed
-- [ ] Delta product discovery confirms valid instruments, volumes and contract multipliers
-- [ ] CoinGlass supported exchange/pair and plan permissions validated from API
-- [ ] Live snapshots and tick streams survive reconnect, drops and stale-book conditions
-- [ ] Source timestamps/closed-candle interpretation verified against exchange feed
-- [ ] Candidate invalidation/expiry verified during discovery and REST outages after service restart
-- [ ] REST candle raw-response retention decision and replay procedure approved
-- [ ] Local + GitHub CI passing; 30-day paper-trading policy decided
-- [ ] No order execution API configured, enabled or shipped
+## 4. Task Scheduler installation pattern
+
+Task Scheduler is the selected built-in supervisor; installation remains an operator action. Create
+four “At startup” tasks under the least-privilege service identity with working directory
+`C:\MarketIntelligence` and actions:
+
+```text
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:\MarketIntelligence\scripts\start-api.ps1
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:\MarketIntelligence\scripts\start-worker.ps1
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:\MarketIntelligence\scripts\start-review-worker.ps1
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:\MarketIntelligence\scripts\start-alert-worker.ps1
+```
+
+Name them `MarketIntel-API`, `MarketIntel-MarketWorker`, `MarketIntel-ReviewWorker` and
+`MarketIntel-AlertWorker`. Configure restart every 1 minute, at most 5 times, stop after 72 hours
+only if an approved maintenance policy restarts it, and “do not start a new instance” on overlap.
+Redirect task history/operational logs into an ACL-restricted, size-bounded log directory and create
+an Event Log alert for repeated failure. Do not run as Administrator.
+
+```powershell
+Start-ScheduledTask -TaskName MarketIntel-API
+Get-ScheduledTask -TaskName 'MarketIntel-*' | Get-ScheduledTaskInfo
+.\scripts\stop-tasks.ps1
+```
+
+After installation, reboot the host and verify bounded recovery, worker heartbeats, lease reclaim and
+no duplicate outbox intents. This reboot/soak is not replaced by unit tests.
+
+## 5. Backup, restore and migration recovery
+
+The online backup uses SQLite's backup API and runs integrity checks. Use a local encrypted target,
+then copy to an approved encrypted off-host location under retention policy.
+
+```powershell
+.\scripts\backup-db.ps1 -Destination C:\MarketIntelBackup\marketintel-20261121.sqlite3
+.\.venv\Scripts\python.exe -m marketintel.maintenance verify C:\MarketIntelBackup\marketintel-20261121.sqlite3
+```
+
+Restore only while all four tasks are stopped. Preserve the failed database for forensics; do not
+delete append-only audit rows. Verify the backup before replacing the configured database path:
+
+```powershell
+.\scripts\stop-tasks.ps1
+.\.venv\Scripts\python.exe -m marketintel.maintenance verify C:\MarketIntelBackup\marketintel-20261121.sqlite3
+Copy-Item data\marketintel.sqlite3 data\marketintel.failed.sqlite3 -ErrorAction SilentlyContinue
+Copy-Item C:\MarketIntelBackup\marketintel-20261121.sqlite3 data\marketintel.sqlite3
+Start-ScheduledTask -TaskName MarketIntel-API
+.\scripts\check-service.ps1
+```
+
+Migrations are additive and idempotent. There is no destructive down-migration. A rollback means
+stopping writers, restoring the pre-migration backup and running the previous signed application
+version. A `DISPATCHED` review job or `RECEIPT_UNKNOWN` alert requires operator reconciliation; do
+not blindly reset it to queued.
+
+## 6. Operational acceptance still required
+
+- Verify Delta symbols/units and perform an extended reconnect, gap, clock-drift and storage-rate
+  soak; SQLite capacity is intentionally not claimed.
+- Verify OpenAI/Anthropic account/model access and official current pricing in one bounded,
+  explicitly authorized smoke test.
+- Verify CoinGlass plan, instruments, license and redistribution rights separately.
+- Authorize a private Slack channel and one real message only in a separate operator-approved test.
+- Execute Task Scheduler installation, reboot recovery, log rotation and backup restore on the
+  intended Windows host.
+- Keep execution absent. Passing checks or dual-model agreement does not establish profitability.
