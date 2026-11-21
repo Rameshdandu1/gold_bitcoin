@@ -40,11 +40,12 @@ trades per symbol and 2,000 candles per symbol/resolution and invokes the produc
 `detect_signal` function for all six engines. It never has a provider, notification, account or
 order transport.
 
-Candidates, four-arm decisions and their exact target/configuration identities are immutable
-records. Decisions are stored before the evaluator reads the journal-backed future quote path.
-Executable outcomes reuse bid/ask, tick, multiplier, fee, slippage, funding and gap policies.
-Ordinary evaluation selects one revision per opportunity and excludes label intervals that enter
-the frozen holdout. Protected holdout access is a separate recorded command.
+Candidates, four-arm decisions and their target/configuration identities are immutable records.
+Phase 6 persists archived-provider decisions when their evidence becomes available, preserves
+their clocks/provenance and revalidates source state before entry. Quote and OHLC evaluation now
+require complete pre-entry and outcome paths. Ordinary aggregate, detail, API and export reads use
+one holdout projection, with deliberate final access recorded before protected results become
+visible. Complete reuse of production admission/lifecycle policy remains an explicit open gate.
 
 Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
 hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,
@@ -76,13 +77,13 @@ units are versioned, and required funding fails closed. Outcomes preserve `NO_EN
 time exit, `AMBIGUOUS` and `INCOMPLETE`. Folds keep all opportunity revisions/arms together and
 purge overlapping label-information intervals with a time embargo.
 
-**Independent review:** the [independent Phase 4 review](docs/audits/phase-4-independent-review.md)
-identified the correctness and workflow gaps assigned to Phase 5. Those findings now have the
-regression coverage and implementation evidence recorded in
-[phase-5-verification.md](docs/audits/phase-5-verification.md). Architectural requirements remain
-distinct from empirical acceptance: live providers, licensed data, prospective duration and
-destination deployment are not proven by fixtures. Passing fixtures are not evidence of live
-provider readiness or strategy performance.
+**Independent review:** [phase-5-verification.md](docs/audits/phase-5-verification.md) records the
+implementation team's executed checks. The later
+[Phase 5 independent review](docs/audits/phase-5-independent-review.md) verifies substantial fixes
+and qualifies their remaining acceptance boundaries. Architectural requirements remain distinct
+from empirical acceptance: live providers, licensed data, prospective duration and destination
+deployment are not proven by fixtures. Passing fixtures are not evidence of live provider readiness
+or strategy performance.
 
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.

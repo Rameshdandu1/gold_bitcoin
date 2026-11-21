@@ -2,6 +2,16 @@
 
 Date: 2026-11-21 (Asia/Kolkata development environment; evidence timestamps are UTC).
 
+> **Later independent review:** this report preserves the implementation team's original checks
+> and dispositions. The [independent Phase 5 review](phase-5-independent-review.md) of merged main
+> `dfbb59ea91bfc034f4ab4ffa76c0dbda094f5a31` independently passed the 227-test baseline and verified
+> substantial corrections, but reproduced seven remaining issues. Its findings qualify the
+> completion claims below, especially full workflow parity, evidence availability/provenance,
+> path coverage, paper recovery, holdout detail protection, alert clocks and legacy-job preflight.
+> Follow [CODEX_PHASE_6.md](../../prompts/CODEX_PHASE_6.md) for the next acceptance work. No historical
+> test output below has been rewritten. Implemented dispositions and remaining limits are recorded
+> separately in [phase-6-verification.md](phase-6-verification.md).
+
 ## Revisions and baseline
 
 - Starting code: `3b07d21079729da41f53c80fa5c4604b1dea9499` (`origin/main`).
