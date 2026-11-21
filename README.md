@@ -91,8 +91,16 @@ No `DELTA_API_KEY` is needed for public market data; do not give trading permiss
 - Replay emits only closed, resolution-aligned candles. It never fills missing periods or uses an
   in-progress bucket.
 
-See `docs/audits/initial-codebase-audit.md` for the measured baseline, live discovery timestamp and
-remaining unverified operational work.
+See the [initial codebase audit](docs/audits/initial-codebase-audit.md) for the measured baseline,
+live discovery timestamp and remaining unverified operational work. Architecture and operating
+references are in [DESIGN.md](DESIGN.md),
+[ADR 0001](docs/adr/0001-delta-event-journal-and-book-integrity.md), [the API guide](docs/API.md),
+[the security policy](docs/SECURITY.md), and
+[the Windows runbook](docs/WINDOWS_DEPLOYMENT.md); the ordered backlog is the
+[implementation plan](docs/IMPLEMENTATION_PLAN.md). Contributors and coding agents should start
+with [AGENTS.md](AGENTS.md), [CODEX_START_HERE.md](prompts/CODEX_START_HERE.md), and
+[CODEX_TASK.md](prompts/CODEX_TASK.md). Release history is recorded in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Run quality checks
 
