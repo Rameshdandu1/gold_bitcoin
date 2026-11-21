@@ -4,11 +4,14 @@
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Implementation status (2026-11-21):** Phase 3 is implemented and fixture-verified on top of the
-independently reviewed Phase 2 baseline. The reproduced R1–R6 correctness gaps are corrected; see
-[the Phase 3 verification report](docs/audits/phase-3-verification.md). Live provider/model access,
-Slack delivery, Windows service installation, market-data soak and strategy performance remain
-external acceptance gates.
+**Review status (2026-11-21):** Phase 3 is merged and its 171-test baseline passes. The original
+session-history, repeated-first-break and future-availability examples are corrected. The
+[independent Phase 3 review](docs/audits/phase-3-independent-review.md) reproduced additional startup,
+reconciliation, provider-identity, revision-scheduling, risk-race, budget and alert-delivery defects.
+The next implementation is [CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md), beginning with mandatory
+4A corrections before historical evaluation and prospective paper research. These findings and
+instructions are not completed fixes. Live provider/model access, Slack delivery, Windows service
+installation, market-data soak and strategy performance remain unverified.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,
@@ -171,13 +174,14 @@ references are in [DESIGN.md](DESIGN.md),
 [ADR 0004](docs/adr/0004-single-operator-auth-and-slack-outbox.md), [the API guide](docs/API.md),
 [the Phase 2 verification report](docs/audits/phase-2-verification.md),
 [the independent Phase 2 review](docs/audits/phase-2-independent-review.md),
+[the independent Phase 3 review](docs/audits/phase-3-independent-review.md),
 [the security policy](docs/SECURITY.md), and
 [the Windows runbook](docs/WINDOWS_DEPLOYMENT.md); the ordered backlog is the
 [implementation plan](docs/IMPLEMENTATION_PLAN.md). Contributors and coding agents should start
-with [AGENTS.md](AGENTS.md), [CODEX_START_HERE.md](prompts/CODEX_START_HERE.md), and
-[CODEX_TASK.md](prompts/CODEX_TASK.md), [CODEX_PHASE_2.md](prompts/CODEX_PHASE_2.md), and
-[CODEX_PHASE_3.md](prompts/CODEX_PHASE_3.md). Release history is recorded in
-[CHANGELOG.md](CHANGELOG.md).
+with [AGENTS.md](AGENTS.md), [CODEX_START_HERE.md](prompts/CODEX_START_HERE.md) and
+[CODEX_TASK.md](prompts/CODEX_TASK.md). Phase instructions are in
+[CODEX_PHASE_2.md](prompts/CODEX_PHASE_2.md), [CODEX_PHASE_3.md](prompts/CODEX_PHASE_3.md) and
+[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md). Release history is recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Run quality checks
 
