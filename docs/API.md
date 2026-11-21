@@ -1,30 +1,38 @@
-# Local HTTP API (read-only MVP)
+# Local operator HTTP API
 
-All endpoints are intentionally read-only; **no order, trading account or credential endpoints exist**. Bind to localhost. Until authentication + HTTPS proxy is added, never expose this API directly to the internet.
+The service is read-only and contains no order, account, leverage, or execution route. Bind it to
+`127.0.0.1`. HTTP Basic authentication protects the dashboard, API, Swagger UI and OpenAPI. Only
+`GET /healthz` is intentionally unauthenticated and returns non-sensitive process liveness. If
+operator credentials are absent, protected routes return 503 rather than opening access. Use Basic
+authentication only over a trusted loopback connection, VPN, or an HTTPS reverse proxy.
 
 | Route | Response / purpose |
 |---|---|
-| `GET /api/health` | ingestion/AI flags, UTC time, worker quality statuses, trading always disabled |
-| `GET /api/engines` | six horizon configurations and last stored decision state |
-| `GET /api/candidates?limit=50` | immutable candidate packet and latest consensus, max 200 rows |
-| `GET /api/candidates/{candidate_id}/assessments` | separately persisted GPT/Claude parsed assessments (if called) |
-| `GET /api/candidates/{candidate_id}/lifecycle` | append-only Phase 2 state, invalidation and expiry events |
-| `GET /api/candidates/{candidate_id}/revisions` | immutable, duplicate-safe candidate revisions |
-| `GET /api/snapshots/{snapshot_id}` | exact content-addressed quantitative feature snapshot, or `null` |
-| `GET /docs` | generated FastAPI OpenAPI docs |
+| `GET /healthz` | minimal unauthenticated process liveness |
+| `GET /readyz` | authenticated configuration, migration, heartbeat, source, queue and budget gates; makes no provider call |
+| `GET /api/health` | UTC response time, flags, source transitions/heartbeats, queue and spend state |
+| `GET /api/engines` | six engine descriptors and last durable state |
+| `GET /api/candidates?limit=50&offset=0` | bounded active revisions, current lifecycle, review run/attempt metadata and historical consensus |
+| `GET /api/candidates/{id}/lifecycle?limit=100&offset=0` | append-only state events |
+| `GET /api/candidates/{id}/revisions?limit=100&offset=0` | immutable revisions |
+| `GET /api/candidates/{id}/assessments` | legacy Phase 2 records, never an authorization source |
+| `GET /api/snapshots/{snapshot_id}` | exact quantitative feature snapshot or `null` |
+| `GET /api/budget` | current UTC-day provider reservations and reported costs |
+| `GET /api/queue` | review-job and alert-outbox counts plus stale lease counts |
+| `GET /docs`, `/openapi.json` | authenticated FastAPI schema and documentation |
 
-**No auth in starter**: localhost-only is a safety requirement, not an access-control substitute. All client UI values must be labelled unreviewed/unavailable when observations are missing. Future endpoints need stable response schemas, pagination, authenticated sessions and rate limits.
+Candidate responses keep `current_lifecycle_*` separate from historical consensus. Provider cards
+use each attempt's `provider`, `status`, requested/returned model and completion time; consensus
+presence is not evidence both providers are currently available. Prices are quote-price units for
+the verified Delta instrument. Gold qualification remains tokenized XAUT/PAXG, not spot gold.
 
-## Provider configuration
-Delta public REST: `https://api.india.delta.exchange` / public WS: `wss://public-socket.india.delta.exchange`. CoinGlass V4: `https://open-api-v4.coinglass.com` header `CG-API-KEY`. OpenAI Responses structured parse and Anthropic Messages parse are used behind typed adapters, disabled by default.
+Allowed CORS origins are an exact operator list. No wildcard origin or client-supplied identity
+header is trusted. Provider keys, Slack tokens and budget pricing are never returned.
 
-## Candidate outcomes and lifecycle
-Phase 2 detector states are `UNAVAILABLE`, `WAIT`, `WATCH`, `CANDIDATE`, `REJECTED`,
-`INVALIDATED` and `EXPIRED`. Legal transitions are validated and appended; candidate revisions are
-immutable and duplicate-safe. There is intentionally no Phase 2 `CONFIRMED` state. Phase 3 may add
-independent AI assessments and deterministic consensus, while target/stop research labelling and
-net-of-cost validation remain Phase 4 work.
+## External integrations
 
-Engine state is read from durable service status. When a snapshot exists, the API reports its
-verified market symbol rather than substituting the configured symbol preference. Candidate and
-snapshot payloads are research evidence and are never order instructions.
+Delta public REST/WS, OpenAI Responses structured parsing, Anthropic Messages structured parsing,
+CoinGlass V4 and Slack Web API are behind environment configuration. AI, CoinGlass, live ingestion
+and Slack delivery are disabled by default. Configuring credentials does not authorize tests to make
+paid calls or send messages. Current model/account entitlement and actual Slack delivery require a
+separate bounded operator-approved smoke test.

@@ -206,6 +206,11 @@ def decide_v2(
         eligibility.calendar_policy != "UNKNOWN",
         f"Calendar/session policy={eligibility.calendar_policy}",
     )
+    current &= gate(
+        "NOTIFICATION_CONFIGURATION",
+        eligibility.notification_ready,
+        "A durable operator destination must be configured before confirmation",
+    )
     if not current:
         return decision("WAIT", "Current deterministic eligibility checks failed")
 

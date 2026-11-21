@@ -1,7 +1,7 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: Design v0.2 / research MVP. **Scope**: deterministic analysis only in Phase 2;
-AI confirmation, alerts and order execution are disabled. **Deployment**: native Windows Server
+**Status**: Design v0.3 / research MVP. **Scope**: deterministic analysis plus opt-in dual-AI
+review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
@@ -26,7 +26,7 @@ flowchart TD
     V --> K[Deterministic Consensus + Risk Gate]
     K --> H[Audit Database and Results]
     H --> U[Authenticated Dashboard]
-    H --> T[Telegram / Email Alert Workers]
+    H --> T[Durable Slack Alert Worker]
 ```
 
 ### Adapters
@@ -65,11 +65,13 @@ reward/risk permit them. No result is a learned forecast, probability, AI confir
 1. Produce a candidate only on a newly **closed** candle, after enough contiguous historical bars.
    Stable ID from `asset|symbol|engine|horizon|candle_close|direction|rule_version`.
 2. Calculate ATR(14), range/structure levels and volatility budget. Evidence includes source freshness and numerical features. Candidate targets/stop computed by code, never AI.
-3. Freeze canonical snapshot + hash. Persist the deterministic candidate revision and lifecycle
-   transition. Phase 2 stops here: it does not invoke GPT, Claude, alerts or execution.
-4. Phase 3 may give the same immutable snapshot to two independent AI calls. Strict parsing and
-   fail-closed consensus remain future gates; no Phase 2 candidate is `CONFIRMED`.
-5. Risk gate: positive entry/stop distances; reward/risk threshold; current price/timestamp freshness; legal/operational source entitlements; no disabled periods; duplicate suppression. `CONFIRMED` is merely an **alert**, NOT an instruction to buy options.
+3. Freeze one canonical analysis envelope as exact bytes plus digest. Persist the candidate revision,
+   lifecycle transition, envelope and a bounded leased review job. Phase 2 evidence remains intact.
+4. Phase 3 independently and concurrently gives those same bytes to GPT and Claude. Strict parsed
+   identities, actual model metadata, persistent budgets and bounded failures feed consensus.
+5. After agreement, re-read revision/lifecycle, executed price, target/stop events, discovery,
+   reconciliation, book, spread, entry drift, cost and calendar/session policy. Atomically commit the
+   decision and revision-scoped outbox intent. `CONFIRMED` is merely an **alert**, NOT an order.
 6. Record candidate revisions, state transitions, invalidation and expiry as append-only rows. Never
    overwrite history. Historical replay evaluates at each event-time candle close and requires the
    candle's explicit availability timestamp in addition to event/receive clocks for trades and books.
@@ -85,16 +87,26 @@ ATR is a scale, not a directional prediction. Naive `ATR * sqrt(horizon / bar_mi
   Feature snapshots and candidate/lifecycle evidence are persisted. This is durable across
   process restart but is not yet throughput-qualified as a high-frequency production tick database.
 - **Production target**: PostgreSQL + TimescaleDB (Windows native PostgreSQL or optional isolated Linux VM), durable raw events and candle tables; queue via PostgreSQL outbox or Redis in a supported Linux VM. Do NOT rely on discontinued native Windows Redis ports. Migrate only after measured feed throughput.
+- **Phase 3 single-host path**: additive SQLite migration adds immutable envelopes, review runs,
+  fenced job leases, provider attempts, UTC budget ledger, decisions and alert outbox. SQLite backup
+  API plus integrity verification is supported; dispatched/receipt-unknown states require operator
+  reconciliation rather than blind retry.
 - Retention policies: raw order-book updates may grow quickly; sample or compress according to license and analytical requirements. Backups: nightly database + off-host restore test.
 
 ### Security
-Windows service identity with least privileges; API listens on 127.0.0.1 behind authenticated HTTPS reverse proxy; no broad CORS; environment secrets not committed; audit access and rotation; `TRADING_ENABLED=false` permanently in this MVP. Record minimal safe diagnostics. Exchange data, retrieved news and LLM output are untrusted.
+Windows service identity with least privileges; API listens on 127.0.0.1 and all routes except
+minimal liveness require constant-time HTTP Basic credentials. Remote access requires a restricted
+HTTPS reverse proxy/VPN. CORS is exact; environment secrets are not committed; `TRADING_ENABLED`
+cannot be enabled. Exchange data, retrieved reference data and LLM output are untrusted.
 
 ### Options follow-up (not implemented in MVP)
 Discover active option products, strikes/expiries, full bid/ask, IV/Greeks; independently compute delta exposure, decay, expected value and worst-case spread/slippage. Validate premium economics before ranking CALL/PUT instruments. Distinguish underlying signal from options order.
 
 ### Operator-visible dashboard
-Six-card grid, data freshness/status per market, source provenance, dual-provider verdicts, disagreements and spend, candidate lifecycle, historical performance (sample size), options page (after Phase 3), system health. Show `WAIT` by default. UI never invents live market data.
+Six-card grid, market observation and source/worker freshness, exact provider attempts/models,
+disagreements and spend, current candidate lifecycle and historical decision. Show `WAIT` by
+default. Do not display unmeasured performance or calibrated-looking confidence. UI never invents
+live market data.
 
 ### Operational SLOs (targets not claims)
 - WS reconnect with exponential jitter and observability; stale trades/book invalidated.

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     live_ingestion_enabled: bool = False
     ai_enabled: bool = False
     trading_enabled: bool = False
+    alerts_enabled: bool = False
 
     delta_rest_url: str = "https://api.india.delta.exchange"
     delta_ws_url: str = "wss://public-socket.india.delta.exchange"
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
     ai_total_deadline_seconds: int = Field(default=90, ge=5, le=600)
     ai_attempt_timeout_seconds: float = Field(default=25, ge=1, le=120)
     ai_queue_max_age_seconds: int = Field(default=120, ge=5, le=3600)
+    ai_job_lease_seconds: int = Field(default=120, ge=30, le=900)
     ai_max_attempts_per_provider: int = Field(default=2, ge=1, le=5)
     ai_max_output_tokens: int = Field(default=650, ge=64, le=4096)
     ai_max_input_tokens: int = Field(default=30_000, ge=1000, le=200_000)
@@ -40,11 +42,24 @@ class Settings(BaseSettings):
     openai_output_microusd_per_million_tokens: int | None = Field(default=None, ge=0)
     anthropic_input_microusd_per_million_tokens: int | None = Field(default=None, ge=0)
     anthropic_output_microusd_per_million_tokens: int | None = Field(default=None, ge=0)
+    risk_fee_bps: str = ""
+    risk_slippage_bps: str = ""
+    risk_maximum_entry_drift_bps: str = "10"
+    risk_maximum_spread_bps: str = "10"
+    risk_minimum_net_reward_risk: str = "1.5"
 
     openai_api_key: str = ""
     openai_model: str = ""
     anthropic_api_key: str = ""
     anthropic_model: str = ""
+    operator_auth_enabled: bool = True
+    operator_username: str = ""
+    operator_password: SecretStr = SecretStr("")
+    cors_allowed_origins_csv: str = "http://127.0.0.1:5173,http://localhost:5173"
+    slack_bot_token: SecretStr = SecretStr("")
+    slack_channel_id: str = ""
+    alert_max_attempts: int = Field(default=3, ge=1, le=10)
+    alert_lease_seconds: int = Field(default=30, ge=5, le=300)
     coinglass_enabled: bool = False
     coinglass_api_key: str = ""
     coinglass_base_url: str = "https://open-api-v4.coinglass.com"

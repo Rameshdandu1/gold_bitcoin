@@ -359,6 +359,29 @@ async def test_missing_price_configuration_makes_zero_provider_calls(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_incomplete_dual_provider_configuration_makes_zero_paid_calls(tmp_path):
+    analysis = analysis_fixture()
+    settings = review_settings(anthropic_api_key="")
+    gpt_transport = SequenceTransport("fixture-openai", [valid_assessment(analysis)])
+    claude_transport = SequenceTransport("fixture-anthropic", [valid_assessment(analysis)])
+    store = Store(tmp_path / "review.sqlite3")
+    run_id, claim = queued_review(store, analysis, settings)
+
+    results = await ReviewOrchestrator(
+        store,
+        settings,
+        GPTAnalyst(settings, gpt_transport),
+        ClaudeAnalyst(settings, claude_transport),
+    ).execute(analysis, run_id=run_id, claim=claim)
+
+    assert [result.status for result in results] == ["NOT_READY", "NOT_READY"]
+    assert all(
+        result.failure_code == "DUAL_PROVIDER_CONFIGURATION_MISSING" for result in results
+    )
+    assert gpt_transport.calls == claude_transport.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_concurrent_providers_share_atomic_total_call_budget(tmp_path):
     analysis = analysis_fixture()
     settings = review_settings(

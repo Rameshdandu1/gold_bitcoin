@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from test_phase3_ai import valid_assessment
 from test_phase3_analysis_storage import phase3_fixture
@@ -13,6 +14,48 @@ from marketintel.storage import Store
 
 def analysis_fixture():
     candidate, snapshot, instrument = phase3_fixture()
+    return candidate, build_analysis_envelope(candidate, snapshot, instrument)
+
+
+def btc_analysis_fixture():
+    candidate, snapshot, instrument = phase3_fixture()
+    candidate = candidate.model_copy(
+        update={
+            "candidate_id": "phase3-btc-fixture-0000001",
+            "snapshot_id": "b" * 64,
+            "asset": "BTC",
+            "symbol": "BTCUSD",
+            "engine": "BTC_FAST",
+            "entry": 70_000,
+            "invalidation": 69_000,
+            "targets": (71_000, 72_000),
+        }
+    )
+    snapshot = snapshot.model_copy(
+        update={
+            "snapshot_id": candidate.snapshot_id,
+            "asset": "BTC",
+            "symbol": "BTCUSD",
+            "engine": "BTC_FAST",
+            "book": snapshot.book.model_copy(
+                update={
+                    "best_bid": Decimal("69999"),
+                    "best_ask": Decimal("70001"),
+                    "spread": Decimal("2"),
+                }
+            ),
+            "vwap": Decimal("69800"),
+        }
+    )
+    instrument = instrument.model_copy(
+        update={
+            "product_id": 27,
+            "symbol": "BTCUSD",
+            "contract_value": Decimal("0.001"),
+            "contract_unit_currency": "BTC",
+            "underlying_asset": "BTC",
+        }
+    )
     return candidate, build_analysis_envelope(candidate, snapshot, instrument)
 
 
@@ -75,6 +118,7 @@ def eligibility(store, analysis, **changes):
         "maximum_spread_bps": "10",
         "minimum_net_reward_risk": "1.2",
         "calendar_policy": "TOKEN_MARKET_ONLY",
+        "notification_ready": True,
     }
     values.update(changes)
     return EligibilitySnapshot(**values)
@@ -92,6 +136,7 @@ def test_positive_consensus_commits_one_revision_scoped_outbox_intent(tmp_path):
     candidate, analysis = analysis_fixture()
     store = Store(tmp_path / "phase3.sqlite3")
     persist_candidate(store, candidate)
+    assert store.save_analysis_envelope(analysis)
     gpt, claude = approvals(analysis)
     decision = decide_v2(
         analysis,
@@ -144,6 +189,34 @@ def test_provider_timeout_or_valid_rejection_never_confirms(tmp_path):
         provider_attempt_ids=("a", "b"),
     )
     assert rejected.status == "REJECTED"
+
+
+def test_hypothetical_btc_fixture_confirms_only_fresh_shared_feasible_target(tmp_path):
+    candidate, analysis = btc_analysis_fixture()
+    store = Store(tmp_path / "btc-phase3.sqlite3")
+    persist_candidate(store, candidate)
+    assert store.save_analysis_envelope(analysis)
+    gpt, claude = approvals(analysis, indices=(2,))
+    current = eligibility(
+        store,
+        analysis,
+        latest_trade_price="70000",
+        best_bid="69999",
+        best_ask="70001",
+    )
+    decision = decide_v2(
+        analysis,
+        gpt,
+        claude,
+        current,
+        run_id="run-btc-positive-fixture",
+        provider_attempt_ids=("openai-btc", "anthropic-btc"),
+    )
+    assert decision.status == "CONFIRMED"
+    assert decision.supported_target_indices == (2,)
+    assert store.commit_consensus_decision_and_outbox(
+        decision, destination_id="slack:fixture-operator"
+    )
 
 
 def test_expiry_equality_stop_breach_spread_and_exhausted_target_fail_closed(tmp_path):

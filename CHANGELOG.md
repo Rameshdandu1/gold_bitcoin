@@ -4,6 +4,34 @@ All notable changes to this project are documented in this file.
 
 The project uses four-part release versions for shipped milestones.
 
+## [0.3.0.0] - 2026-11-21
+
+### Added
+
+- Add canonical immutable analysis envelopes, exact revision identities, additive Phase 3 storage,
+  fenced review jobs, provider attempts, UTC budget reservations and atomic notification outbox.
+- Add independent concurrent OpenAI Responses and Anthropic Messages structured adapters with
+  strict schemas, server-owned metadata and typed failure outcomes.
+- Add fresh deterministic consensus gates for lifecycle/revision, executed price, stop/target order,
+  source/book quality, spread, drift, costs and reward/risk.
+- Add authenticated operator APIs/dashboard, Slack durable delivery, terminal lifecycle alerts,
+  readiness/queue/spend views and native Windows backup/recovery scripts.
+
+### Fixed
+
+- Correct incomplete session/previous-day history, repeated BOS/CHOCH identity, late candle
+  availability, stop breach/recovery handling, discovery admission and stale lifecycle display.
+- Prevent older-revision approval, stale worker leases, duplicated provider slots and obsolete alert
+  delivery from authorizing a current confirmation.
+
+### Safety
+
+- Keep live ingestion, AI, CoinGlass and outbound alerts disabled by default. Missing credentials,
+  model IDs, pricing, cost assumptions, destination or fresh market facts fail closed.
+- No paid provider call, real notification, trading credential, order endpoint or deployment was
+  used for this release's development verification. Agreement is not an accuracy/profitability
+  claim.
+
 ## [0.2.0.0] - 2026-11-21
 
 ### Added

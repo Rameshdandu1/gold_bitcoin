@@ -689,6 +689,23 @@ class Store:
         )
         return dict(zip(fields, row, strict=True))
 
+    def all_source_health(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT source, transition_at_utc, heartbeat_at_utc, last_success_at_utc, "
+                "state, detail, last_error FROM source_health ORDER BY source"
+            ).fetchall()
+        fields = (
+            "source",
+            "transition_at_utc",
+            "heartbeat_at_utc",
+            "last_success_at_utc",
+            "state",
+            "detail",
+            "last_error",
+        )
+        return [dict(zip(fields, row, strict=True)) for row in rows]
+
     def source_is_eligible(
         self, source: str, *, now: datetime, maximum_success_age_seconds: int
     ) -> bool:
@@ -1213,6 +1230,12 @@ class Store:
             "SELECT updated_at_utc FROM book_checkpoints WHERE symbol=?",
             (candidate["symbol"],),
         ).fetchone()
+        latest_trade = conn.execute(
+            "SELECT received_at_utc, event_id FROM raw_market_events "
+            "WHERE symbol=? AND channel='trades' "
+            "ORDER BY received_at_utc DESC, event_id DESC LIMIT 1",
+            (candidate["symbol"],),
+        ).fetchone()
         evidence = {
             "candidate_id": candidate_id_value,
             "revision_id": active[0],
@@ -1222,6 +1245,7 @@ class Store:
             "price_watermark": watermark,
             "source_health": health,
             "book_checkpoint_at": book[0] if book else None,
+            "latest_trade": latest_trade,
         }
         token = hashlib.sha256(
             json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
@@ -1285,6 +1309,38 @@ class Store:
                 ).hexdigest()
                 outbox_id = hashlib.sha256(f"outbox|{delivery_key}".encode()).hexdigest()
                 now_text = decision.decided_at_utc.astimezone(UTC).isoformat()
+                envelope_row = conn.execute(
+                    "SELECT canonical_bytes FROM analysis_envelopes WHERE digest=?",
+                    (decision.envelope_digest,),
+                ).fetchone()
+                if envelope_row is None:
+                    raise ValueError("Confirmed decision is missing its canonical envelope")
+                envelope = json.loads(bytes(envelope_row[0]))
+                alert_payload = {
+                    "schema_version": "1",
+                    "decision_id": decision.decision_id,
+                    "candidate_id": decision.candidate_id,
+                    "candidate_revision_id": decision.candidate_revision_id,
+                    "event_type": "CONFIRMED",
+                    "symbol": envelope["symbol"],
+                    "venue": envelope["venue"],
+                    "asset": envelope["asset"],
+                    "direction": envelope["direction"],
+                    "horizon_minutes": envelope["horizon_minutes"],
+                    "entry": envelope["entry"],
+                    "invalidation": envelope["invalidation"],
+                    "targets": [
+                        {"index": index, "price": envelope["targets"][index - 1]}
+                        for index in decision.supported_target_indices
+                    ],
+                    "market_observed_at_utc": envelope["observed_at_utc"],
+                    "reviewed_at_utc": decision.decided_at_utc.astimezone(UTC).isoformat(),
+                    "expires_at_utc": envelope["expires_at_utc"],
+                    "meaning": (
+                        "Research review checks passed; not an order, probability, guarantee, "
+                        "or trading advice."
+                    ),
+                }
                 conn.execute(
                     "INSERT OR IGNORE INTO notification_outbox VALUES (?, ?, ?, ?, ?, ?, ?, "
                     "'PENDING', ?, 0, ?, NULL, NULL, 0, NULL, NULL, ?, ?)",
@@ -1296,7 +1352,7 @@ class Store:
                         "CONFIRMED",
                         destination_id,
                         delivery_key,
-                        decision.model_dump_json(),
+                        json.dumps(alert_payload, sort_keys=True, separators=(",", ":")),
                         now_text,
                         now_text,
                         now_text,
@@ -1337,6 +1393,102 @@ class Store:
         for item in result:
             item["payload"] = json.loads(item["payload"])
         return result
+
+    def claim_outbox_item(self, owner: str, *, now: datetime, lease_seconds: int) -> dict | None:
+        now_text = now.astimezone(UTC).isoformat()
+        lease_until = (now + timedelta(seconds=lease_seconds)).astimezone(UTC).isoformat()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT outbox_id, decision_id, candidate_id, revision_id, event_type, "
+                "destination_id, delivery_key, payload, attempts, lease_generation "
+                "FROM notification_outbox WHERE available_at_utc<=? AND "
+                "(status IN ('PENDING', 'RETRY') OR "
+                "(status='CLAIMED' AND lease_expires_at_utc<?)) "
+                "ORDER BY available_at_utc, created_at_utc LIMIT 1",
+                (now_text, now_text),
+            ).fetchone()
+            if row is None:
+                return None
+            generation = int(row[9]) + 1
+            cursor = conn.execute(
+                "UPDATE notification_outbox SET status='CLAIMED', lease_owner=?, "
+                "lease_expires_at_utc=?, lease_generation=?, updated_at_utc=? "
+                "WHERE outbox_id=? AND lease_generation=?",
+                (owner, lease_until, generation, now_text, row[0], row[9]),
+            )
+            if cursor.rowcount != 1:
+                return None
+        return {
+            "outbox_id": row[0],
+            "decision_id": row[1],
+            "candidate_id": row[2],
+            "revision_id": row[3],
+            "event_type": row[4],
+            "destination_id": row[5],
+            "delivery_key": row[6],
+            "payload": json.loads(row[7]),
+            "attempts": int(row[8]),
+            "owner": owner,
+            "generation": generation,
+        }
+
+    def outbox_delivery_eligible(self, item: dict, *, now: datetime) -> tuple[bool, str]:
+        with self._conn() as conn:
+            active = conn.execute(
+                "SELECT revision_id FROM active_candidate_revisions WHERE candidate_id=?",
+                (item["candidate_id"],),
+            ).fetchone()
+            lifecycle = conn.execute(
+                "SELECT event_id, to_state FROM candidate_lifecycle_events WHERE candidate_id=? "
+                "ORDER BY occurred_at_utc DESC, event_id DESC LIMIT 1",
+                (item["candidate_id"],),
+            ).fetchone()
+        if active is None or active[0] != item["revision_id"]:
+            return False, "candidate revision is no longer active"
+        if item["event_type"] == "CONFIRMED":
+            if lifecycle is None or lifecycle[1] != "CANDIDATE":
+                return False, "candidate lifecycle is terminal or unavailable"
+            if now >= datetime.fromisoformat(item["payload"]["expires_at_utc"]):
+                return False, "candidate expired before delivery"
+        elif (
+            lifecycle is None
+            or lifecycle[0] != item["payload"].get("lifecycle_event_id")
+            or lifecycle[1] != item["event_type"]
+        ):
+            return False, "terminal lifecycle intent is no longer current"
+        return True, "eligible"
+
+    def finish_outbox_attempt(
+        self,
+        item: dict,
+        *,
+        status: str,
+        now: datetime,
+        receipt_id: str | None = None,
+        error: str | None = None,
+        retry_at: datetime | None = None,
+    ) -> bool:
+        if status not in {"SENT", "RETRY", "FAILED", "SUPPRESSED", "RECEIPT_UNKNOWN"}:
+            raise ValueError("Invalid outbox completion status")
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE notification_outbox SET status=?, attempts=attempts+1, "
+                "available_at_utc=?, lease_owner=NULL, lease_expires_at_utc=NULL, "
+                "receipt_id=?, last_error=?, updated_at_utc=? WHERE outbox_id=? "
+                "AND status='CLAIMED' AND lease_owner=? AND lease_generation=?",
+                (
+                    status,
+                    (retry_at or now).astimezone(UTC).isoformat(),
+                    receipt_id,
+                    error[:500] if error else None,
+                    now.astimezone(UTC).isoformat(),
+                    item["outbox_id"],
+                    item["owner"],
+                    item["generation"],
+                ),
+            )
+        return cursor.rowcount == 1
 
     def complete_review_job(
         self,
@@ -1582,6 +1734,52 @@ class Store:
                     event.model_dump_json(),
                 ),
             )
+            if cursor.rowcount == 1 and event.to_state.value in {"INVALIDATED", "EXPIRED"}:
+                confirmations = conn.execute(
+                    "SELECT decision_id, revision_id, destination_id, payload "
+                    "FROM notification_outbox WHERE candidate_id=? AND event_type='CONFIRMED'",
+                    (event.candidate_id,),
+                ).fetchall()
+                for decision_id, revision_id, destination_id, payload_json in confirmations:
+                    payload = json.loads(payload_json)
+                    delivery_key = hashlib.sha256(
+                        (
+                            f"{decision_id}|{revision_id}|{event.to_state.value}|"
+                            f"{event.event_id}|{destination_id}"
+                        ).encode()
+                    ).hexdigest()
+                    outbox_id = hashlib.sha256(f"outbox|{delivery_key}".encode()).hexdigest()
+                    now_text = event.occurred_at_utc.astimezone(UTC).isoformat()
+                    payload.update(
+                        {
+                            "event_type": event.to_state.value,
+                            "lifecycle_event_id": event.event_id,
+                            "lifecycle_reason": event.reason,
+                            "lifecycle_at_utc": now_text,
+                            "source_event_id": event.source_event_id,
+                            "meaning": (
+                                "The prior research confirmation is no longer active; this is "
+                                "not an order or trading advice."
+                            ),
+                        }
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO notification_outbox VALUES (?, ?, ?, ?, ?, ?, ?, "
+                        "'PENDING', ?, 0, ?, NULL, NULL, 0, NULL, NULL, ?, ?)",
+                        (
+                            outbox_id,
+                            decision_id,
+                            event.candidate_id,
+                            revision_id,
+                            event.to_state.value,
+                            destination_id,
+                            delivery_key,
+                            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                            now_text,
+                            now_text,
+                            now_text,
+                        ),
+                    )
             return cursor.rowcount == 1
 
     def candidate_lifecycle(self, candidate_id: str) -> list[CandidateLifecycleEvent]:
@@ -1693,7 +1891,7 @@ class Store:
             dict(zip(("service", "updated_at", "state", "detail"), r, strict=True)) for r in rows
         ]
 
-    def recent_candidates(self, limit: int = 50) -> list[dict]:
+    def recent_candidates(self, limit: int = 50, offset: int = 0) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
                 """
@@ -1721,11 +1919,11 @@ class Store:
                 FROM candidates c
                 JOIN active_candidate_revisions a ON a.candidate_id=c.candidate_id
                 JOIN candidate_revision_identities r ON r.revision_id=a.revision_id
-                ORDER BY c.created_at DESC LIMIT ?
+                ORDER BY c.created_at DESC LIMIT ? OFFSET ?
             """,
-                (min(max(limit, 1), 200),),
+                (min(max(limit, 1), 200), max(offset, 0)),
             ).fetchall()
-        return [
+        output = [
             {
                 "candidate": json.loads(candidate),
                 "candidate_revision_id": revision_id,
@@ -1743,6 +1941,97 @@ class Store:
                 lifecycle_at,
             ) in rows
         ]
+        for item in output:
+            item["review"] = self.review_summary(
+                item["candidate"]["candidate_id"], item["candidate_revision_id"]
+            )
+        return output
+
+    def review_summary(self, candidate_id: str, revision_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT run_id, status, created_at_utc, deadline_at_utc, envelope_digest "
+                "FROM review_runs WHERE candidate_id=? AND revision_id=? "
+                "ORDER BY created_at_utc DESC, run_id DESC LIMIT 1",
+                (candidate_id, revision_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": row[0],
+            "status": row[1],
+            "created_at_utc": row[2],
+            "deadline_at_utc": row[3],
+            "envelope_digest": row[4],
+            "attempts": self.provider_results(row[0]),
+        }
+
+    def budget_status(self, *, now: datetime | None = None) -> dict:
+        now = now or datetime.now(UTC)
+        day = now.astimezone(UTC).date().isoformat()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(reserved_calls), 0), "
+                "COALESCE(SUM(reserved_cost_microusd), 0), "
+                "COALESCE(SUM(actual_cost_microusd), 0), "
+                "SUM(CASE WHEN status='USAGE_UNKNOWN' THEN 1 ELSE 0 END) "
+                "FROM budget_ledger WHERE day_utc=?",
+                (day,),
+            ).fetchone()
+        return {
+            "day_utc": day,
+            "reserved_calls": int(row[0] or 0),
+            "reserved_cost_microusd": int(row[1] or 0),
+            "reported_actual_cost_microusd": int(row[2] or 0),
+            "usage_unknown_count": int(row[3] or 0),
+        }
+
+    def queue_status(self, *, now: datetime | None = None) -> dict:
+        now = now or datetime.now(UTC)
+        now_text = now.astimezone(UTC).isoformat()
+        with self._conn() as conn:
+            review_rows = conn.execute(
+                "SELECT status, COUNT(*) FROM review_jobs GROUP BY status"
+            ).fetchall()
+            stale_review_leases = conn.execute(
+                "SELECT COUNT(*) FROM review_jobs WHERE status='CLAIMED' "
+                "AND lease_expires_at_utc<?",
+                (now_text,),
+            ).fetchone()[0]
+            alert_rows = conn.execute(
+                "SELECT status, COUNT(*) FROM notification_outbox GROUP BY status"
+            ).fetchall()
+            stale_alert_leases = conn.execute(
+                "SELECT COUNT(*) FROM notification_outbox WHERE status='CLAIMED' "
+                "AND lease_expires_at_utc<?",
+                (now_text,),
+            ).fetchone()[0]
+        return {
+            "review_jobs": {status: int(count) for status, count in review_rows},
+            "stale_review_leases": int(stale_review_leases),
+            "alert_items": {status: int(count) for status, count in alert_rows},
+            "stale_alert_leases": int(stale_alert_leases),
+        }
+
+    def migration_ids(self) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT migration_id FROM schema_migrations ORDER BY migration_id"
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def backup_to(self, destination: Path) -> None:
+        """Create a transactionally consistent SQLite backup and verify its integrity."""
+        destination = Path(destination).resolve()
+        source = self.path.resolve()
+        if destination == source:
+            raise ValueError("Backup destination must differ from the live database")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with self._conn() as source_conn, sqlite3.connect(destination) as backup_conn:
+            source_conn.backup(backup_conn)
+            result = backup_conn.execute("PRAGMA integrity_check").fetchone()
+            if result is None or result[0] != "ok":
+                raise RuntimeError("SQLite backup integrity check failed")
 
     def last_engine_states(self, engines: list[EngineDescriptor]) -> list[dict]:
         output: list[dict] = []

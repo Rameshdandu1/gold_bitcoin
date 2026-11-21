@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from marketintel.ai import ClaudeAnalyst, GPTAnalyst, independent_review
+from marketintel.analysis import build_analysis_envelope
 from marketintel.coinglass import CoinGlassV4, unavailable_context
 from marketintel.config import Settings
 from marketintel.consensus import decide
@@ -359,8 +360,51 @@ async def poll_closed_candles(
                             occurred_at=result.candidate.observed_at_utc,
                             reason="Deterministic M2 candidate; NOT AI CONFIRMED",
                         )
-                        store.add_candidate_with_lifecycle(result.candidate, initial)
-                    # M2 deliberately never calls GPT, Claude, alerts, or execution.
+                        created = store.add_candidate_with_lifecycle(result.candidate, initial)
+                        if created and settings.ai_enabled and result.snapshot is not None:
+                            analysis = build_analysis_envelope(
+                                result.candidate,
+                                result.snapshot,
+                                market,
+                                evaluation_settings={
+                                    "fee_bps": settings.risk_fee_bps,
+                                    "slippage_bps": settings.risk_slippage_bps,
+                                    "maximum_entry_drift_bps": (
+                                        settings.risk_maximum_entry_drift_bps
+                                    ),
+                                    "maximum_spread_bps": settings.risk_maximum_spread_bps,
+                                    "minimum_net_reward_risk": (
+                                        settings.risk_minimum_net_reward_risk
+                                    ),
+                                },
+                            )
+                            deadline = min(
+                                result.candidate.expires_at_utc,
+                                decision_now
+                                + timedelta(seconds=settings.ai_total_deadline_seconds),
+                            )
+                            if deadline > decision_now:
+                                store.create_review_run(
+                                    analysis,
+                                    provider_config={
+                                        "openai_model": settings.openai_model,
+                                        "anthropic_model": settings.anthropic_model,
+                                    },
+                                    deadline_at=deadline,
+                                    now=decision_now,
+                                )
+                                store.set_status(
+                                    engine.engine,
+                                    "REVIEW_QUEUED",
+                                    "Immutable revision queued for dual independent review",
+                                )
+                        elif created and settings.ai_enabled:
+                            store.set_status(
+                                engine.engine,
+                                "CANDIDATE_UNREVIEWED",
+                                "Canonical feature snapshot unavailable; no AI call scheduled",
+                            )
+                    # No order execution exists; review and alerts run in durable workers.
                     continue
 
                 candidate = create_candidate(engine, closed, now=decision_now)
@@ -524,6 +568,7 @@ async def main() -> None:
                 if discovery.invalid_product_count:
                     detail += f"; ignored invalid rows={discovery.invalid_product_count}"
                 store.record_source_status("product_discovery", "AVAILABLE", detail)
+            store.record_source_status("worker", "AVAILABLE", "Discovery cycle completed")
             for asset in ("BTC", "GOLD"):
                 instrument = markets.get(asset)
                 if instrument is not None:

@@ -47,10 +47,19 @@ provider availability. CoinGlass subscription calls and a licensed Gold referenc
 operator validation items.
 
 ## Phase 3 — dual-model and hardened service
-11. Guarded GPT and Claude structured responses with timeout, token ceilings, cached idempotence, retry caps, budget monitor, response/version audit.
-12. Independent evaluations on immutable snapshots; no chain-of-thought request; compare explicit target-index overlap, invalidation agreement and hard risk checks. Emergency WAIT if either provider fails.
-13. Auth, TLS reverse proxy, key rotation, Windows Services/Task Scheduler for restart, OS firewall, ingestion tracing and error alerts.
-14. Slack/Telegram notifications with exact trigger/target/stop/source timestamp, dedup and expiry; never transmit secrets.
+- [x] Correct R1–R6: full session/previous-day acquisition, first-break structure identity, common
+  candle availability, executed-event breach persistence, continuing discovery/reconciliation gates
+  and accurate current lifecycle projection.
+- [x] Canonical deeply immutable analysis bytes; revision-scoped envelopes, runs, leased jobs,
+  provider attempts, decisions, migrations, persistent budgets and restore verification.
+- [x] Independent concurrent OpenAI/Anthropic structured adapters with actual response metadata,
+  bounded deadlines/retries and typed fail-closed provider outcomes. Missing verified pricing
+  prevents paid dispatch.
+- [x] Fresh post-review revision, lifecycle, time, trade, stop/target, source, book, spread, drift,
+  fee/slippage and net reward/risk gates; decision and Slack intent commit atomically.
+- [x] Authenticated bounded API/UI; Slack outbox worker, terminal event identities, durable delivery
+  states; native Windows startup/check/backup instructions. Installation, live delivery and provider
+  account/model access remain external verification items.
 
 ## Phase 4 — historical evaluation
 15. Historical market replay (event-time ordered), embargo/purged walk-forward test, no interpolation of future prices.
@@ -65,5 +74,7 @@ operator validation items.
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
-- M3: both AI providers independently return validated schema and failures fail closed.
+- M3: implemented and fixture-verified. Live provider/model entitlement, paid-call behavior, Slack
+  delivery, Windows Task Scheduler installation and extended market soak remain explicit operator
+  acceptance gates; passing fixtures are not a strategy-performance claim.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.

@@ -162,6 +162,7 @@ class EligibilitySnapshot(BaseModel):
     maximum_spread_bps: str
     minimum_net_reward_risk: str
     calendar_policy: Literal["TOKEN_MARKET_ONLY", "VERIFIED_CALENDAR", "UNKNOWN"]
+    notification_ready: bool = False
 
 
 class GateResult(BaseModel):

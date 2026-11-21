@@ -139,6 +139,12 @@ class CanonicalAnalysis(BaseModel):
         return self
 
 
+def load_canonical_analysis(payload: bytes, digest: str) -> CanonicalAnalysis:
+    """Rehydrate stored evidence while rechecking both canonical bytes and digest."""
+    envelope = AnalysisEnvelope.model_validate_json(payload)
+    return CanonicalAnalysis(envelope=envelope, canonical_bytes=payload, digest=digest)
+
+
 def candidate_revision_id(candidate: CandidateSignal) -> str:
     preimage = b"candidate-revision-v2\0" + canonical_json_bytes(candidate)
     return hashlib.sha256(preimage).hexdigest()

@@ -206,19 +206,51 @@ class ReviewOrchestrator:
         if (now - created_at).total_seconds() > self.settings.ai_queue_max_age_seconds:
             deadline_at = now
 
+        configuration_failure: str | None = None
+        if self.settings.ai_enabled:
+            if not all(
+                (
+                    self.gpt.api_key,
+                    self.gpt.requested_model,
+                    self.claude.api_key,
+                    self.claude.requested_model,
+                )
+            ):
+                configuration_failure = "DUAL_PROVIDER_CONFIGURATION_MISSING"
+            elif self._rates("OPENAI") is None or self._rates("ANTHROPIC") is None:
+                configuration_failure = "MODEL_PRICE_CONFIGURATION_MISSING"
+            elif self.settings.ai_total_cost_limit_microusd_per_day <= 0:
+                configuration_failure = "SPEND_LIMIT_NOT_CONFIGURED"
+        if configuration_failure is not None:
+            results = tuple(
+                self._not_ready(adapter, attempt=1, code=configuration_failure)
+                for adapter in (self.gpt, self.claude)
+            )
+            for adapter, result in zip((self.gpt, self.claude), results, strict=True):
+                self.store.save_provider_result(
+                    run_id=run_id,
+                    job_id=claim["job_id"],
+                    owner=claim["owner"],
+                    generation=claim["generation"],
+                    dispatch_id=f"not-ready-{adapter.provider.lower()}-{uuid.uuid4().hex}",
+                    result=result,
+                )
+            self.store.complete_review_job(
+                claim["job_id"],
+                owner=claim["owner"],
+                generation=claim["generation"],
+                status="WAIT",
+                now=self.clock(),
+            )
+            return results[0], results[1]
+
         should_dispatch = (
             self.settings.ai_enabled
             and self.settings.ai_total_cost_limit_microusd_per_day > 0
-            and (
-                (
-                    bool(self.gpt.api_key and self.gpt.requested_model)
-                    and self._rates("OPENAI") is not None
-                )
-                or (
-                    bool(self.claude.api_key and self.claude.requested_model)
-                    and self._rates("ANTHROPIC") is not None
-                )
-            )
+            and bool(self.gpt.api_key and self.gpt.requested_model)
+            and self._rates("OPENAI") is not None
+            and bool(self.claude.api_key and self.claude.requested_model)
+            and self._rates("ANTHROPIC") is not None
         )
         if should_dispatch:
             marked = self.store.mark_review_dispatched(
