@@ -297,10 +297,25 @@ def test_false_breakout_is_not_a_candidate():
 
 def test_fast_engine_can_trigger_from_aligned_closed_three_minute_context():
     config = next(item for item in QUANT_ENGINE_CONFIGS if item.engine == "GOLD_FAST")
-    bars = [
+    shifted = [
         row.model_copy(update={"open_time": row.open_time + timedelta(minutes=2)})
         for row in policy_bars(config, "BULLISH")
     ]
+    bars = [
+        Candle(
+            symbol="XAUTUSD",
+            resolution="1m",
+            open_time=shifted[0].open_time - timedelta(minutes=2 - index),
+            open=2600,
+            high=2603,
+            low=2597,
+            close=2600,
+            volume_contracts=100,
+            source="TEST_FIXTURE_NOT_LIVE",
+            available_at_utc=shifted[0].open_time - timedelta(minutes=1 - index),
+        )
+        for index in range(2)
+    ] + shifted
     base = 2600.0
     bars[-3] = bars[-3].model_copy(
         update={"open": base, "high": base + 3, "low": base - 10, "close": base}
@@ -430,6 +445,25 @@ def test_future_book_and_external_metric_cannot_enter_snapshot():
     assert any("external metrics were excluded" in item for item in result.snapshot.warnings)
 
 
+@pytest.mark.parametrize("engine_id", ["GOLD_FAST", "BTC_FAST"])
+def test_r4_direct_detector_rejects_candles_not_yet_available(engine_id):
+    config = next(item for item in QUANT_ENGINE_CONFIGS if item.engine == engine_id)
+    bars = policy_bars(config, "BULLISH")
+    now = bars[-1].open_time + timedelta(minutes=1)
+    delayed = [row.model_copy(update={"available_at_utc": now + timedelta(days=1)}) for row in bars]
+    result = detect_signal(
+        config,
+        candles=delayed,
+        trades=supportive_trades(instrument(config.asset).symbol, now, "BULLISH"),
+        instrument=instrument(config.asset),
+        now=now,
+        book_override=supporting_book(now, "BULLISH"),
+        reference_available=config.asset == "GOLD",
+    )
+    assert result.state is SignalState.WAIT
+    assert result.candidate is None
+
+
 def test_missing_candle_stale_feed_and_wrong_gold_instrument_fail_closed():
     config = next(item for item in QUANT_ENGINE_CONFIGS if item.engine == "GOLD_FAST")
     bars = policy_bars(config, "BULLISH")
@@ -478,6 +512,56 @@ def test_gold_thirty_dollar_target_is_filtered_when_only_ten_is_feasible():
     ]
     assert Decimal("10") in distances
     assert Decimal("30") not in distances
+
+
+@pytest.mark.parametrize(
+    ("direction", "session_price", "session_high", "session_low"),
+    [
+        ("BULLISH", 2612.0, 2615.0, 2609.0),
+        ("BEARISH", 2588.0, 2591.0, 2585.0),
+    ],
+)
+def test_r1_hourly_engine_uses_complete_utc_session_context(
+    direction, session_price, session_high, session_low
+):
+    """R1: trigger lookback must not replace complete session VWAP/levels."""
+    config = next(item for item in QUANT_ENGINE_CONFIGS if item.engine == "GOLD_HOURLY")
+    trigger_rows = [
+        row.model_copy(update={"open_time": row.open_time + timedelta(hours=5)})
+        for row in policy_bars(config, direction)
+    ]
+    session_start = datetime(2026, 11, 18, 0, 0, tzinfo=UTC)
+    earlier_rows = [
+        Candle(
+            symbol="XAUTUSD",
+            resolution="5m",
+            open_time=session_start + timedelta(minutes=5 * index),
+            open=session_price,
+            high=session_high,
+            low=session_low,
+            close=session_price,
+            volume_contracts=1_000,
+            source="TEST_FIXTURE_NOT_LIVE",
+            available_at_utc=session_start + timedelta(minutes=5 * (index + 1)),
+        )
+        for index in range(60)
+    ]
+    bars = earlier_rows + trigger_rows
+    now = datetime(2026, 11, 18, 10, 0, tzinfo=UTC)
+
+    result = detect_signal(
+        config,
+        candles=bars,
+        trades=supportive_trades("XAUTUSD", now, direction),
+        instrument=instrument("GOLD"),
+        now=now,
+        book_override=supporting_book(now, direction),
+        reference_available=True,
+    )
+
+    assert result.candidate is None, (
+        "complete session VWAP and opposing levels must block the cropped-window candidate"
+    )
 
 
 def test_wide_spread_can_eliminate_otherwise_feasible_gold_targets():

@@ -117,6 +117,38 @@ class Store:
                     state TEXT NOT NULL,
                     detail TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS source_health (
+                    source TEXT PRIMARY KEY,
+                    transition_at_utc TEXT NOT NULL,
+                    heartbeat_at_utc TEXT NOT NULL,
+                    last_success_at_utc TEXT,
+                    state TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    last_error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS candidate_price_watermarks (
+                    candidate_id TEXT PRIMARY KEY,
+                    received_at_utc TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS rest_candle_observations (
+                    observation_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    resolution TEXT NOT NULL,
+                    request_start_utc TEXT NOT NULL,
+                    request_end_utc TEXT NOT NULL,
+                    response_available_at_utc TEXT NOT NULL,
+                    payload_digest TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS rest_candle_observations_no_update
+                    BEFORE UPDATE ON rest_candle_observations
+                    BEGIN SELECT RAISE(ABORT, 'rest_candle_observations is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS rest_candle_observations_no_delete
+                    BEFORE DELETE ON rest_candle_observations
+                    BEGIN SELECT RAISE(ABORT, 'rest_candle_observations is append-only'); END;
                 CREATE TABLE IF NOT EXISTS book_checkpoints (
                     symbol TEXT PRIMARY KEY,
                     updated_at_utc TEXT NOT NULL,
@@ -392,6 +424,31 @@ class Store:
             current = conn.execute(
                 "SELECT state, detail FROM service_status WHERE service=?", (source,)
             ).fetchone()
+            health = conn.execute(
+                "SELECT transition_at_utc, last_success_at_utc FROM source_health WHERE source=?",
+                (source,),
+            ).fetchone()
+            transition_at = (
+                health[0] if current == (state, safe_detail) and health else occurred_at.isoformat()
+            )
+            success = state in {"AVAILABLE", "VALID", "CONNECTED"}
+            last_success = (
+                occurred_at.astimezone(UTC).isoformat()
+                if success
+                else (health[1] if health else None)
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO source_health VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    source,
+                    transition_at,
+                    occurred_at.astimezone(UTC).isoformat(),
+                    last_success,
+                    state,
+                    safe_detail,
+                    None if success else safe_detail,
+                ),
+            )
             if current == (state, safe_detail):
                 return False
             cursor = conn.execute(
@@ -414,6 +471,140 @@ class Store:
                 ),
             )
             return cursor.rowcount == 1
+
+    def source_health(self, source: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT source, transition_at_utc, heartbeat_at_utc, last_success_at_utc, "
+                "state, detail, last_error FROM source_health WHERE source=?",
+                (source,),
+            ).fetchone()
+        if row is None:
+            return None
+        fields = (
+            "source",
+            "transition_at_utc",
+            "heartbeat_at_utc",
+            "last_success_at_utc",
+            "state",
+            "detail",
+            "last_error",
+        )
+        return dict(zip(fields, row, strict=True))
+
+    def source_is_eligible(
+        self, source: str, *, now: datetime, maximum_success_age_seconds: int
+    ) -> bool:
+        health = self.source_health(source)
+        if health is None or health["last_success_at_utc"] is None:
+            return False
+        verified = datetime.fromisoformat(health["last_success_at_utc"])
+        age = (now - verified).total_seconds()
+        return 0 <= age <= maximum_success_age_seconds
+
+    def journal_rest_candles(
+        self,
+        *,
+        source: str,
+        symbol: str,
+        resolution: str,
+        request_start: datetime,
+        request_end: datetime,
+        response_available_at: datetime,
+        candles: list,
+    ) -> str:
+        payload = json.dumps(
+            [candle.model_dump(mode="json") for candle in candles],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        identity = "|".join(
+            [
+                source,
+                symbol,
+                resolution,
+                request_start.astimezone(UTC).isoformat(),
+                request_end.astimezone(UTC).isoformat(),
+                response_available_at.astimezone(UTC).isoformat(),
+                digest,
+            ]
+        )
+        observation_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO rest_candle_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    observation_id,
+                    source,
+                    symbol,
+                    resolution,
+                    request_start.astimezone(UTC).isoformat(),
+                    request_end.astimezone(UTC).isoformat(),
+                    response_available_at.astimezone(UTC).isoformat(),
+                    digest,
+                    payload,
+                ),
+            )
+        return observation_id
+
+    def candidate_trade_events(
+        self, candidate: Candidate, *, through: datetime
+    ) -> list[RawMarketEvent]:
+        with self._conn() as conn:
+            watermark = conn.execute(
+                "SELECT received_at_utc, event_id FROM candidate_price_watermarks "
+                "WHERE candidate_id=?",
+                (candidate.candidate_id,),
+            ).fetchone()
+            received_at = (
+                watermark[0] if watermark else candidate.observed_at_utc.astimezone(UTC).isoformat()
+            )
+            event_id = watermark[1] if watermark else ""
+            rows = conn.execute(
+                "SELECT event_id, schema_version, venue, symbol, channel, event_time_utc, "
+                "received_at_utc, publish_time_utc, sequence, checksum, payload "
+                "FROM raw_market_events WHERE symbol=? AND channel='trades' "
+                "AND event_time_utc>=? AND received_at_utc<=? "
+                "AND (received_at_utc>? OR (received_at_utc=? AND event_id>?)) "
+                "ORDER BY received_at_utc, event_time_utc, event_id",
+                (
+                    candidate.symbol,
+                    candidate.observed_at_utc.astimezone(UTC).isoformat(),
+                    through.astimezone(UTC).isoformat(),
+                    received_at,
+                    received_at,
+                    event_id,
+                ),
+            ).fetchall()
+        return [
+            RawMarketEvent(
+                event_id=row[0],
+                schema_version=row[1],
+                venue=row[2],
+                symbol=row[3],
+                channel=row[4],
+                event_time_utc=datetime.fromisoformat(row[5]),
+                received_at_utc=datetime.fromisoformat(row[6]),
+                publish_time_utc=datetime.fromisoformat(row[7]) if row[7] else None,
+                sequence=row[8],
+                checksum=row[9],
+                payload=json.loads(row[10]),
+            )
+            for row in rows
+        ]
+
+    def advance_candidate_price_watermark(self, candidate_id: str, event: RawMarketEvent) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO candidate_price_watermarks VALUES (?, ?, ?, ?)",
+                (
+                    candidate_id,
+                    event.received_at_utc.astimezone(UTC).isoformat(),
+                    event.event_id,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
 
     def source_status_history(self, source: str | None = None) -> list[dict]:
         query = "SELECT event_id, occurred_at_utc, source, state, detail FROM source_status_events"
@@ -700,7 +891,22 @@ class Store:
                         ORDER BY r.observed_at_utc DESC, r.snapshot_id DESC LIMIT 1
                     ),
                     c.payload
-                ), d.payload
+                ), d.payload,
+                (
+                    SELECT e.to_state FROM candidate_lifecycle_events e
+                    WHERE e.candidate_id=c.candidate_id
+                    ORDER BY e.occurred_at_utc DESC, e.event_id DESC LIMIT 1
+                ),
+                (
+                    SELECT e.reason FROM candidate_lifecycle_events e
+                    WHERE e.candidate_id=c.candidate_id
+                    ORDER BY e.occurred_at_utc DESC, e.event_id DESC LIMIT 1
+                ),
+                (
+                    SELECT e.occurred_at_utc FROM candidate_lifecycle_events e
+                    WHERE e.candidate_id=c.candidate_id
+                    ORDER BY e.occurred_at_utc DESC, e.event_id DESC LIMIT 1
+                )
                 FROM candidates c LEFT JOIN decisions d ON c.candidate_id = d.candidate_id
                 ORDER BY c.created_at DESC LIMIT ?
             """,
@@ -710,8 +916,11 @@ class Store:
             {
                 "candidate": json.loads(candidate),
                 "consensus": json.loads(decision) if decision else None,
+                "current_lifecycle_state": lifecycle_state,
+                "current_lifecycle_reason": lifecycle_reason,
+                "current_lifecycle_at_utc": lifecycle_at,
             }
-            for candidate, decision in rows
+            for candidate, decision, lifecycle_state, lifecycle_reason, lifecycle_at in rows
         ]
 
     def last_engine_states(self, engines: list[EngineDescriptor]) -> list[dict]:

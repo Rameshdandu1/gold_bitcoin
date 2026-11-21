@@ -171,6 +171,9 @@ async def test_quant_candidate_invalidates_when_instrument_disappears(tmp_path, 
     now = datetime.now(UTC)
     store = Store(tmp_path / "market.sqlite3")
     candidate = persist_active_btc_candidate(store, now)
+    store.record_source_status(
+        "product_discovery:BTC", "AVAILABLE", "TEST_FIXTURE_NOT_LIVE", occurred_at=now
+    )
 
     async def stop_after_iteration(_delay):
         raise asyncio.CancelledError
@@ -219,6 +222,82 @@ async def test_quant_candidate_invalidates_during_rest_outage(tmp_path, monkeypa
     )
     monkeypatch.setattr("marketintel.worker.DeltaREST", FailingREST)
     monkeypatch.setattr("marketintel.worker.ENGINE_CONFIGS", (QUANT_ENGINE_BY_ID["BTC_FAST"],))
+    monkeypatch.setattr("marketintel.worker.asyncio.sleep", stop_after_iteration)
+    settings = Settings(database_path=tmp_path / "market.sqlite3")
+
+    with pytest.raises(asyncio.CancelledError):
+        await poll_closed_candles(settings, store, {"BTC": instrument})
+
+    lifecycle = store.candidate_lifecycle(candidate.candidate_id)
+    assert [event.to_state for event in lifecycle] == [
+        SignalState.CANDIDATE,
+        SignalState.INVALIDATED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_r2_durable_trade_breach_invalidates_after_price_recovers(tmp_path, monkeypatch):
+    """R2: every post-observation breach matters; the latest candle is insufficient."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    store = Store(tmp_path / "market.sqlite3")
+    candidate = persist_active_btc_candidate(store, now)
+    store.record_source_status(
+        "product_discovery:BTC", "AVAILABLE", "TEST_FIXTURE_NOT_LIVE", occurred_at=now
+    )
+    assert store.append_raw_event(trade_event(now - timedelta(seconds=30), "68999"))
+    assert store.append_raw_event(trade_event(now - timedelta(seconds=10), "70000"))
+    candle = Candle(
+        symbol="BTCUSD",
+        resolution="1m",
+        open_time=now.replace(second=0) - timedelta(minutes=2),
+        open=70200,
+        high=70300,
+        low=70100,
+        close=70251,
+        volume_contracts=100,
+        source="TEST_FIXTURE_NOT_LIVE",
+        available_at_utc=now - timedelta(minutes=1),
+    )
+
+    class FakeREST:
+        def __init__(self, _url):
+            pass
+
+        async def historical_candles(self, *_args, **_kwargs):
+            return [candle]
+
+    def fake_detect(*_args, **_kwargs):
+        return SimpleNamespace(
+            engine="BTC_FAST",
+            state=SignalState.WAIT,
+            reason="TEST_FIXTURE_NOT_LIVE",
+            candidate=None,
+            snapshot=SimpleNamespace(
+                snapshot_id="f" * 64,
+                source_quality="FRESH",
+                book=SimpleNamespace(available=True),
+            ),
+        )
+
+    async def stop_after_iteration(_delay):
+        raise asyncio.CancelledError
+
+    instrument = Instrument(
+        product_id=27,
+        symbol="BTCUSD",
+        contract_type="perpetual_futures",
+        contract_value=Decimal("0.001"),
+        contract_unit_currency="BTC",
+        tick_size=Decimal("0.5"),
+        underlying_asset="BTC",
+        quoting_asset="USD",
+        settling_asset="USD",
+        notional_type="vanilla",
+    )
+    monkeypatch.setattr("marketintel.worker.DeltaREST", FakeREST)
+    monkeypatch.setattr("marketintel.worker.ENGINE_CONFIGS", (QUANT_ENGINE_BY_ID["BTC_FAST"],))
+    monkeypatch.setattr("marketintel.worker.detect_signal", fake_detect)
+    monkeypatch.setattr(store, "add_feature_snapshot", lambda _snapshot: True)
     monkeypatch.setattr("marketintel.worker.asyncio.sleep", stop_after_iteration)
     settings = Settings(database_path=tmp_path / "market.sqlite3")
 
@@ -298,6 +377,42 @@ async def test_periodic_discovery_keeps_collectors_when_symbols_are_unchanged(mo
     assert streamer_starts == 1
 
 
+def test_r6_discovery_cache_expires_and_recovers_after_fresh_verification(tmp_path):
+    store = Store(tmp_path / "market.sqlite3")
+    start = datetime(2026, 11, 21, 0, 0, tzinfo=UTC)
+    assert not store.source_is_eligible(
+        "product_discovery:BTC", now=start, maximum_success_age_seconds=300
+    )
+
+    store.record_source_status(
+        "product_discovery:BTC", "AVAILABLE", "verified fixture", occurred_at=start
+    )
+    store.record_source_status(
+        "product_discovery:BTC",
+        "DEGRADED",
+        "refresh outage fixture",
+        occurred_at=start + timedelta(seconds=10),
+    )
+    assert store.source_is_eligible(
+        "product_discovery:BTC",
+        now=start + timedelta(seconds=299),
+        maximum_success_age_seconds=300,
+    )
+    assert not store.source_is_eligible(
+        "product_discovery:BTC",
+        now=start + timedelta(seconds=301),
+        maximum_success_age_seconds=300,
+    )
+
+    recovered = start + timedelta(seconds=302)
+    store.record_source_status(
+        "product_discovery:BTC", "AVAILABLE", "verified again", occurred_at=recovered
+    )
+    assert store.source_is_eligible(
+        "product_discovery:BTC", now=recovered, maximum_success_age_seconds=300
+    )
+
+
 @pytest.mark.asyncio
 async def test_m2_candidate_persists_without_ai_confirmation_call(tmp_path, monkeypatch):
     now = datetime.now(UTC)
@@ -373,6 +488,26 @@ async def test_m2_candidate_persists_without_ai_confirmation_call(tmp_path, monk
     monkeypatch.setattr("marketintel.worker.independent_review", ai_must_not_run)
     monkeypatch.setattr("marketintel.worker.asyncio.sleep", stop_after_iteration)
     store = Store(tmp_path / "market.sqlite3")
+    event_micros = int((now - timedelta(seconds=2)).timestamp() * 1_000_000)
+    gold_event = parse_trade_message(
+        {
+            "type": "trades",
+            "sy": "XAUTUSD",
+            "p": "2605",
+            "s": "1",
+            "r": "t",
+            "t": event_micros,
+            "ts": event_micros + 1_000,
+        },
+        received_at=now - timedelta(seconds=1),
+    )[0]
+    store.append_raw_event(gold_event)
+    store.record_source_status(
+        "product_discovery:GOLD", "AVAILABLE", "TEST_FIXTURE_NOT_LIVE", occurred_at=now
+    )
+    store.record_source_status(
+        "candle_reconciliation:XAUTUSD", "VALID", "TEST_FIXTURE_NOT_LIVE", occurred_at=now
+    )
     settings = Settings(database_path=tmp_path / "market.sqlite3", ai_enabled=True)
 
     with pytest.raises(asyncio.CancelledError):

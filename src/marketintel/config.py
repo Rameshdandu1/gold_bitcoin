@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     data_max_age_seconds: int = Field(default=180, ge=15, le=3600)
     delta_book_max_age_seconds: float = Field(default=10, ge=1, le=120)
     delta_discovery_refresh_seconds: int = Field(default=300, ge=30, le=3600)
+    delta_discovery_max_age_seconds: int = Field(default=900, ge=30, le=86400)
+    delta_reconciliation_max_age_seconds: int = Field(default=180, ge=15, le=3600)
     poll_seconds: int = Field(default=30, ge=10, le=600)
     min_reward_risk: float = Field(default=1.5, ge=1, le=20)
     max_ai_calls_per_day: int = Field(default=50, ge=0)

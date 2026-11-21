@@ -30,6 +30,7 @@ from marketintel.storage import Store
 
 LOGGER = logging.getLogger(__name__)
 ENGINE_CONFIGS = QUANT_ENGINE_CONFIGS
+MAX_DELTA_CANDLES_PER_RESPONSE = 2_000
 
 
 def _resolution(engine: object) -> str:
@@ -56,6 +57,31 @@ def _sweep_quant_candidates(
 ) -> None:
     """Close persisted candidates even when their required market source is unavailable."""
     for active in store.active_candidates(engine=engine.engine, symbol=symbol):
+        breached = False
+        for raw_event in store.candidate_trade_events(active, through=now):
+            replayed = replay_trade_records([raw_event], symbol=active.symbol, through=now)
+            if not replayed:
+                store.advance_candidate_price_watermark(active.candidate_id, raw_event)
+                continue
+            trade = replayed[0]
+            transition = terminal_transition(
+                active,
+                current_state=SignalState.CANDIDATE,
+                now=max(trade.event_time_utc, trade.received_at_utc),
+                latest_price=trade.price,
+                source_fresh=True,
+                evaluation_snapshot_id=snapshot_id,
+                price_source="EXECUTED_TRADE",
+                source_event_id=raw_event.event_id,
+            )
+            if transition is not None:
+                store.record_candidate_lifecycle(transition)
+                breached = True
+            store.advance_candidate_price_watermark(active.candidate_id, raw_event)
+            if breached:
+                break
+        if breached:
+            continue
         transition = terminal_transition(
             active,
             current_state=SignalState.CANDIDATE,
@@ -63,9 +89,53 @@ def _sweep_quant_candidates(
             latest_price=latest_price or Decimal(str(active.entry)),
             source_fresh=source_fresh,
             evaluation_snapshot_id=snapshot_id,
+            price_source="CLOSED_CANDLE" if latest_price is not None else "NONE",
         )
         if transition is not None:
             store.record_candidate_lifecycle(transition)
+
+
+async def _historical_coverage(
+    rest: DeltaREST,
+    store: Store,
+    *,
+    symbol: str,
+    resolution: str,
+    start: datetime,
+    end: datetime,
+) -> list:
+    """Fetch and journal complete bounded pages within Delta's documented 2,000-row limit."""
+    interval = timedelta(minutes=BAR_MINUTES[resolution])
+    page_span = interval * MAX_DELTA_CANDLES_PER_RESPONSE
+    cursor = start
+    by_open_time = {}
+    while cursor < end:
+        page_end = min(cursor + page_span, end)
+        page = await rest.historical_candles(symbol, resolution, cursor, page_end)
+        available_at = datetime.now(UTC)
+        store.journal_rest_candles(
+            source="delta_india_rest_v2_history_candles",
+            symbol=symbol,
+            resolution=resolution,
+            request_start=cursor,
+            request_end=page_end,
+            response_available_at=available_at,
+            candles=page,
+        )
+        for candle in page:
+            by_open_time[candle.open_time] = candle
+        cursor = page_end
+    return [by_open_time[key] for key in sorted(by_open_time)]
+
+
+def _candidate_current_price_is_eligible(candidate, trades) -> bool:
+    if not trades:
+        return False
+    latest = max(trades, key=lambda trade: (trade.received_at_utc, trade.event_id))
+    stop = Decimal(str(candidate.invalidation))
+    if candidate.direction == "BULLISH":
+        return latest.price > stop
+    return latest.price < stop
 
 
 def _sweep_all_quant_candidates(store: Store, *, now: datetime) -> None:
@@ -107,13 +177,26 @@ async def poll_closed_candles(
             try:
                 resolution = _resolution(engine)
                 base_minutes = BAR_MINUTES[resolution]
-                history_bars = int(getattr(engine, "min_candles", 65)) + 10
                 request_at = datetime.now(UTC)
-                history = await rest.historical_candles(
-                    symbol,
-                    resolution,
-                    request_at - timedelta(minutes=base_minutes * history_bars),
-                    request_at,
+                history_bars = int(getattr(engine, "min_candles", 65)) + 10
+                trigger_start = request_at - timedelta(minutes=base_minutes * history_bars)
+                previous_day_start = datetime.combine(
+                    request_at.astimezone(UTC).date() - timedelta(days=1),
+                    datetime.min.time(),
+                    tzinfo=UTC,
+                )
+                request_start = (
+                    min(trigger_start, previous_day_start)
+                    if isinstance(engine, QuantEngineConfig)
+                    else trigger_start
+                )
+                history = await _historical_coverage(
+                    rest,
+                    store,
+                    symbol=symbol,
+                    resolution=resolution,
+                    start=request_start,
+                    end=request_at,
                 )
                 # The decision clock is captured only after REST input is available. The
                 # checkpoint is read before that clock, while later journal reads are
@@ -169,6 +252,25 @@ async def poll_closed_candles(
                             service, "VALID" if result.valid else "INVALID", detail
                         )
                 if isinstance(engine, QuantEngineConfig) and isinstance(market, Instrument):
+                    discovery_source = f"product_discovery:{engine.asset}"
+                    if not store.source_is_eligible(
+                        discovery_source,
+                        now=decision_now,
+                        maximum_success_age_seconds=settings.delta_discovery_max_age_seconds,
+                    ):
+                        store.set_status(
+                            engine.engine,
+                            SignalState.WAIT.value,
+                            "Verified instrument metadata is missing or expired",
+                        )
+                        _sweep_quant_candidates(
+                            store,
+                            engine,
+                            now=decision_now,
+                            source_fresh=False,
+                            symbol=symbol,
+                        )
+                        continue
                     trade_tail, recent_trades = await asyncio.gather(
                         asyncio.to_thread(
                             store.raw_events,
@@ -225,6 +327,30 @@ async def poll_closed_candles(
                         ),
                     )
                     if result.candidate is not None:
+                        reconciliation = store.source_health(f"candle_reconciliation:{symbol}")
+                        reconciliation_fresh = (
+                            reconciliation is not None
+                            and reconciliation["state"] == "VALID"
+                            and (
+                                decision_now
+                                - datetime.fromisoformat(reconciliation["heartbeat_at_utc"])
+                            ).total_seconds()
+                            <= settings.delta_reconciliation_max_age_seconds
+                        )
+                        if not reconciliation_fresh:
+                            store.set_status(
+                                engine.engine,
+                                SignalState.WAIT.value,
+                                "REST/stream candle reconciliation is not currently valid",
+                            )
+                            continue
+                        if not _candidate_current_price_is_eligible(result.candidate, trades):
+                            store.set_status(
+                                engine.engine,
+                                SignalState.WAIT.value,
+                                "Current executed trade is beyond invalidation or unavailable",
+                            )
+                            continue
                         initial = lifecycle_event(
                             candidate_id=result.candidate.candidate_id,
                             snapshot_id=result.candidate.snapshot_id,
@@ -398,6 +524,20 @@ async def main() -> None:
                 if discovery.invalid_product_count:
                     detail += f"; ignored invalid rows={discovery.invalid_product_count}"
                 store.record_source_status("product_discovery", "AVAILABLE", detail)
+            for asset in ("BTC", "GOLD"):
+                instrument = markets.get(asset)
+                if instrument is not None:
+                    store.record_source_status(
+                        f"product_discovery:{asset}",
+                        "AVAILABLE",
+                        f"verified {instrument.symbol} product metadata",
+                    )
+                else:
+                    store.record_source_status(
+                        f"product_discovery:{asset}",
+                        "UNAVAILABLE",
+                        discovery.unavailable.get(asset, "No verified instrument"),
+                    )
             if markets != active_markets:
                 await stop_market_tasks()
                 active_markets = markets
@@ -447,6 +587,11 @@ async def main() -> None:
             raise
         except Exception as exc:
             _sweep_all_quant_candidates(store, now=datetime.now(UTC))
+            store.record_source_status("product_discovery", "DEGRADED", type(exc).__name__)
+            for asset in active_markets:
+                store.record_source_status(
+                    f"product_discovery:{asset}", "DEGRADED", type(exc).__name__
+                )
             store.record_source_status("worker", "ERROR", type(exc).__name__)
             LOGGER.warning("Worker fault: %s; retrying", type(exc).__name__)
             await asyncio.sleep(30)

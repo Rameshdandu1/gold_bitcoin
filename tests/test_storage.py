@@ -135,3 +135,37 @@ def test_lifecycle_transition_is_monotonic_and_single_winner(tmp_path, make_bars
         SignalState.CANDIDATE,
         SignalState.INVALIDATED,
     ]
+
+
+def test_r5_recent_candidate_read_model_reports_current_terminal_lifecycle(tmp_path, make_bars):
+    store = Store(tmp_path / "market.sqlite3")
+    bars = make_bars(n=35, last_close=125)
+    created = create_candidate(
+        EngineConfig("GOLD", "1m", 30),
+        bars,
+        now=bars[-1].open_time + timedelta(minutes=1, seconds=15),
+    )
+    assert created is not None
+    initial = lifecycle_event(
+        candidate_id=created.candidate_id,
+        snapshot_id=created.snapshot_id,
+        from_state=None,
+        to_state=SignalState.CANDIDATE,
+        occurred_at=created.observed_at_utc,
+        reason="TEST_FIXTURE_NOT_LIVE",
+    )
+    assert store.add_candidate_with_lifecycle(created, initial)
+    terminal = lifecycle_event(
+        candidate_id=created.candidate_id,
+        snapshot_id=created.snapshot_id,
+        from_state=SignalState.CANDIDATE,
+        to_state=SignalState.INVALIDATED,
+        occurred_at=created.observed_at_utc + timedelta(seconds=1),
+        reason="TEST_FIXTURE_NOT_LIVE breach",
+    )
+    assert store.record_candidate_lifecycle(terminal)
+
+    item = store.recent_candidates()[0]
+    assert item["candidate"]["state"] == "CANDIDATE"
+    assert item["current_lifecycle_state"] == "INVALIDATED"
+    assert item["current_lifecycle_reason"] == "TEST_FIXTURE_NOT_LIVE breach"

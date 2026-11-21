@@ -15,6 +15,7 @@ from marketintel.indicators import average_true_range
 from marketintel.models import (
     BookFeatures,
     Candle,
+    CoverageWindow,
     Direction,
     ExternalMetric,
     FeatureSnapshot,
@@ -70,8 +71,15 @@ def closed_candles(
 ) -> list[Candle]:
     """Return a unique closed series and reject gaps instead of filling them."""
     _aware(through, "through")
+    closed = [candle for candle in candles if candle_close(candle) <= through]
+    if any(candle.available_at_utc is None for candle in closed):
+        raise FeatureIntegrityError("Closed candles require factual available_at_utc")
     ordered = sorted(
-        (candle for candle in candles if candle_close(candle) <= through),
+        (
+            candle
+            for candle in closed
+            if candle.available_at_utc is not None and candle.available_at_utc <= through
+        ),
         key=lambda candle: candle.open_time,
     )
     if not ordered:
@@ -138,6 +146,9 @@ def resample_closed_candles(
                 close=rows[-1].close,
                 volume_contracts=sum(row.volume_contracts for row in rows),
                 source=f"{rows[0].source}_resampled",
+                available_at_utc=max(
+                    row.available_at_utc for row in rows if row.available_at_utc is not None
+                ),
             )
         )
     return result
@@ -214,8 +225,8 @@ def structure_events(
     if left < 1 or right < 1:
         raise ValueError("Pivot confirmation windows must be positive")
     rows = list(candles)
-    highs: list[tuple[int, Decimal]] = []
-    lows: list[tuple[int, Decimal]] = []
+    highs: list[tuple[int, Decimal, datetime]] = []
+    lows: list[tuple[int, Decimal, datetime]] = []
     events: list[StructureEvent] = []
     for index in range(left, len(rows) - right):
         current = rows[index]
@@ -228,7 +239,7 @@ def structure_events(
             kind = StructureKind.HH if highs and high > highs[-1][1] else StructureKind.LH
             if not highs:
                 kind = StructureKind.HH
-            highs.append((index, high))
+            highs.append((index, high, confirmed_at))
             events.append(
                 StructureEvent(
                     kind=kind,
@@ -244,7 +255,7 @@ def structure_events(
             kind = StructureKind.HL if lows and low > lows[-1][1] else StructureKind.LL
             if not lows:
                 kind = StructureKind.LL
-            lows.append((index, low))
+            lows.append((index, low, confirmed_at))
             events.append(
                 StructureEvent(
                     kind=kind,
@@ -256,46 +267,82 @@ def structure_events(
                     explanation="Non-repainting swing low confirmed by right-side closed bars",
                 )
             )
-    if not rows:
-        return tuple(events)
-    latest = rows[-1]
-    latest_close = Decimal(str(latest.close))
-    last_kinds = {event.kind for event in events[-4:]}
-    prior_bias = (
-        Direction.BULLISH
-        if {StructureKind.HH, StructureKind.HL} <= last_kinds
-        else Direction.BEARISH
-        if {StructureKind.LH, StructureKind.LL} <= last_kinds
-        else Direction.NEUTRAL
+    pivot_events = tuple(events)
+
+    def bias_before(when: datetime) -> Direction:
+        kinds = {event.kind for event in pivot_events if event.confirmed_at_utc <= when}
+        if {StructureKind.HH, StructureKind.HL} <= kinds:
+            return Direction.BULLISH
+        if {StructureKind.LH, StructureKind.LL} <= kinds:
+            return Direction.BEARISH
+        return Direction.NEUTRAL
+
+    # Each confirmed pivot owns one immutable first-break identity. Re-evaluating an
+    # expanding series therefore retains the original break time instead of stamping
+    # every continuation bar as a new BOS/CHOCH.
+    for pivot_index, level, confirmed_at in highs:
+        broken = next(
+            (
+                row
+                for row in rows[pivot_index + 1 :]
+                if candle_close(row) > confirmed_at and Decimal(str(row.close)) > level
+            ),
+            None,
+        )
+        if broken is not None:
+            prior_bias = bias_before(candle_close(broken))
+            events.append(
+                StructureEvent(
+                    kind=(
+                        StructureKind.CHOCH
+                        if prior_bias is Direction.BEARISH
+                        else StructureKind.BOS
+                    ),
+                    direction=Direction.BULLISH,
+                    resolution=broken.resolution,
+                    level=level,
+                    pivot_time_utc=rows[pivot_index].open_time,
+                    confirmed_at_utc=candle_close(broken),
+                    explanation="First closed-candle break of confirmed swing high",
+                )
+            )
+    for pivot_index, level, confirmed_at in lows:
+        broken = next(
+            (
+                row
+                for row in rows[pivot_index + 1 :]
+                if candle_close(row) > confirmed_at and Decimal(str(row.close)) < level
+            ),
+            None,
+        )
+        if broken is not None:
+            prior_bias = bias_before(candle_close(broken))
+            events.append(
+                StructureEvent(
+                    kind=(
+                        StructureKind.CHOCH
+                        if prior_bias is Direction.BULLISH
+                        else StructureKind.BOS
+                    ),
+                    direction=Direction.BEARISH,
+                    resolution=broken.resolution,
+                    level=level,
+                    pivot_time_utc=rows[pivot_index].open_time,
+                    confirmed_at_utc=candle_close(broken),
+                    explanation="First closed-candle break of confirmed swing low",
+                )
+            )
+    return tuple(
+        sorted(
+            events,
+            key=lambda event: (
+                event.confirmed_at_utc,
+                event.pivot_time_utc,
+                event.kind.value,
+                str(event.level),
+            ),
+        )
     )
-    latest_time = candle_close(latest)
-    if highs and latest_close > highs[-1][1] and highs[-1][0] < len(rows) - 1:
-        kind = StructureKind.CHOCH if prior_bias is Direction.BEARISH else StructureKind.BOS
-        events.append(
-            StructureEvent(
-                kind=kind,
-                direction=Direction.BULLISH,
-                resolution=latest.resolution,
-                level=highs[-1][1],
-                pivot_time_utc=rows[highs[-1][0]].open_time,
-                confirmed_at_utc=latest_time,
-                explanation="Closed candle broke a confirmed swing high",
-            )
-        )
-    elif lows and latest_close < lows[-1][1] and lows[-1][0] < len(rows) - 1:
-        kind = StructureKind.CHOCH if prior_bias is Direction.BULLISH else StructureKind.BOS
-        events.append(
-            StructureEvent(
-                kind=kind,
-                direction=Direction.BEARISH,
-                resolution=latest.resolution,
-                level=lows[-1][1],
-                pivot_time_utc=rows[lows[-1][0]].open_time,
-                confirmed_at_utc=latest_time,
-                explanation="Closed candle broke a confirmed swing low",
-            )
-        )
-    return tuple(events)
 
 
 def liquidity_levels(candles: Sequence[Candle]) -> tuple[LiquidityLevel, ...]:
@@ -555,6 +602,7 @@ def build_feature_snapshot(
     engine: str,
     horizon_minutes: int,
     candles: Sequence[Candle],
+    trigger_candles: Sequence[Candle] | None = None,
     trades: Iterable[TradeRecord],
     instrument: Instrument,
     through: datetime,
@@ -563,19 +611,21 @@ def build_feature_snapshot(
     external_metrics: Sequence[ExternalMetric] = (),
     context_candles: Mapping[str, Sequence[Candle]] | None = None,
     warnings: Sequence[str] = (),
+    coverage: Sequence[CoverageWindow] = (),
     volatility_budget_multiplier: Decimal = Decimal("1.5"),
     trade_max_age_seconds: int = 180,
 ) -> FeatureSnapshot:
     rows = closed_candles(candles, through=through)
-    if len(rows) < 22:
+    trigger_rows = closed_candles(trigger_candles or candles, through=through)
+    if len(trigger_rows) < 22:
         raise FeatureIntegrityError("At least 22 contiguous closed candles are required")
-    atr_value = average_true_range(rows, 14)
+    atr_value = average_true_range(trigger_rows, 14)
     if atr_value is None or atr_value <= 0:
         raise FeatureIntegrityError("ATR is unavailable")
     atr = Decimal(str(atr_value))
-    rel_volume = relative_volume(rows)
-    expansion = range_expansion(rows)
-    base_minutes = RESOLUTION_MINUTES[rows[-1].resolution]
+    rel_volume = relative_volume(trigger_rows)
+    expansion = range_expansion(trigger_rows)
+    base_minutes = RESOLUTION_MINUTES[trigger_rows[-1].resolution]
     projected = (
         atr * Decimal(str(math.sqrt(horizon_minutes / base_minutes))) * volatility_budget_multiplier
     )
@@ -585,7 +635,7 @@ def build_feature_snapshot(
         instrument=instrument,
         through=through,
         flow=flow,
-        latest_candle=rows[-1],
+        latest_candle=trigger_rows[-1],
     )
     context_candles = context_candles or {}
     structures = list(structure_events(rows))
@@ -596,8 +646,38 @@ def build_feature_snapshot(
         )
         structures.extend(structure_events(context_rows))
         levels.extend(liquidity_levels(context_rows))
-    regime = market_regime(rows, atr=atr)
-    vwap = session_vwap(rows, through=through)
+    coverage_by_name = {item.name: item for item in coverage}
+    if not coverage_by_name.get(
+        "UTC_SESSION",
+        CoverageWindow(
+            name="UTC_SESSION",
+            required=True,
+            complete=False,
+            expected_start_utc=through,
+            expected_end_utc=through,
+            reason="coverage not supplied",
+        ),
+    ).complete:
+        levels = [level for level in levels if not level.kind.startswith("SESSION_")]
+    if not coverage_by_name.get(
+        "PREVIOUS_UTC_DAY",
+        CoverageWindow(
+            name="PREVIOUS_UTC_DAY",
+            required=False,
+            complete=False,
+            expected_start_utc=through,
+            expected_end_utc=through,
+            reason="coverage not supplied",
+        ),
+    ).complete:
+        levels = [level for level in levels if not level.kind.startswith("PREVIOUS_DAY_")]
+    regime = market_regime(trigger_rows, atr=atr)
+    session_coverage = coverage_by_name.get("UTC_SESSION")
+    vwap = (
+        session_vwap(rows, through=through)
+        if session_coverage is None or session_coverage.complete
+        else None
+    )
     all_warnings = list(warnings)
     quality = "FRESH"
     if flow.last_500.trade_count < 500 or flow.last_5000.trade_count < 5_000:
@@ -631,6 +711,7 @@ def build_feature_snapshot(
         "structures": [event.model_dump(mode="json") for event in structures],
         "liquidity_levels": [level.model_dump(mode="json") for level in levels],
         "vwap": str(vwap) if vwap is not None else None,
+        "coverage": [item.model_dump(mode="json") for item in coverage],
         "source_quality": quality,
         "warnings": all_warnings,
         "external_metrics": [metric.model_dump(mode="json") for metric in external_metrics],
@@ -658,6 +739,7 @@ def build_feature_snapshot(
             range_expansion=expansion,
         ),
         vwap=vwap,
+        coverage=tuple(coverage),
         source_quality=quality,
         warnings=tuple(all_warnings),
         external_metrics=tuple(external_metrics),
