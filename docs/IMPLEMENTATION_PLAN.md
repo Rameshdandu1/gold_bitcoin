@@ -83,11 +83,10 @@ Implementation order and acceptance details are in [CODEX_PHASE_3.md](../prompts
 AI and outbound alerts remain disabled by default. Fixture completion, paid-provider smoke tests,
 Windows deployment and strategy-performance validation are separate evidence categories.
 
-**Independent Phase 3 review gate (2026-11-21):** the implementation checkboxes above describe
-delivered code, not closed acceptance. The 171-test baseline passes, but
-[the independent review](audits/phase-3-independent-review.md) reproduces P3-01 through P3-10 and
-identifies recovery/deadline acceptance gaps. The original Phase 2 counterexamples improved;
-current startup, live review and alert guarantees still require the corrective 4A slice.
+**Independent review history:** the original Phase 3 reproductions now have verified corrections.
+The later [Phase 4 review](audits/phase-4-independent-review.md) distinguishes those improvements
+from remaining dispatch, request-configuration and recovery defects. Implementation checkboxes
+above describe delivered code, not completed operational or empirical acceptance.
 
 ## Phase 4 — historical evaluation and prospective paper research
 
@@ -98,39 +97,70 @@ current startup, live review and alert guarantees still require the corrective 4
 
 Detailed implementation instructions: [CODEX_PHASE_4.md](../prompts/CODEX_PHASE_4.md).
 
-- [x] **4A:** fix environment-template parsing, complete-bucket reconciliation, request digest,
+- [ ] **4A acceptance:** fix environment-template parsing, complete-bucket reconciliation, request digest,
   revision scheduling, consistent risk/commit evidence, real input/spend limits, model/finish-status
   identity, dispatch recovery/destination, current alert eligibility and structure-state logic.
   Test finalization crashes/deadlines and non-ASCII auth input handling.
-- [x] **4B:** versioned dataset manifest and isolated as-observed replay, driven by factual
+- [ ] **4B acceptance:** versioned dataset manifest and isolated as-observed replay, driven by factual
   availability/evaluation clocks with separate exchange event time, coverage and checkpoint parity.
-- [x] **4C:** eligible entry time, instrument/target identity, complete outcome path, conservative
+- [ ] **4C acceptance:** eligible entry time, instrument/target identity, complete outcome path, conservative
   ambiguity, realistic quote-side fills and versioned contract/fee/slippage/funding assumptions.
-- [x] **4D:** rules/GPT/Claude/dual filter comparisons on common opportunities, arm-specific latency,
+- [ ] **4D acceptance:** rules/GPT/Claude/dual filter comparisons on common opportunities, arm-specific latency,
   preserved abstention denominators, shared opportunity folds, time-based label-information
   purging including delayed no-entry outcomes, untouched holdout and dependence-aware uncertainty.
   Retrospective LLM analysis remains explicitly exploratory.
-- [x] **4E:** durable prospective paper ledger, write-before-outcome decisions, restart/gap handling
+- [ ] **4E acceptance:** durable prospective paper ledger, write-before-outcome decisions, restart/gap handling
   and separately declared hypothetical portfolio policy. Default off; no exchange orders.
-- [x] **4F:** authenticated research pages, reproducible CLI/exports, coverage/sample/uncertainty
+- [ ] **4F acceptance:** authenticated research pages, reproducible CLI/exports, coverage/sample/uncertainty
   reporting, honest insufficient-evidence states and native Windows run instructions.
 
 Software/fixture completion does not complete weeks of forward observation or demonstrate an edge.
 Unavailable historical trades/books, licensed context and contemporaneous AI outputs stay
 unavailable; no synthetic performance may be presented as empirical evidence.
 
-These checkboxes mean software and deterministic-fixture completion only. Real dataset licensing,
-genuine historical provider assessments, forward paper observation, statistical uncertainty on an
-adequate sample and destination Windows Server deployment remain open acceptance work.
+**Independent Phase 4 gate (2026-11-21):** PR #6 delivered corrections and research components, with
+206 passing tests. The acceptance boxes above remain open: the public replay does not run the six
+engines, evaluation imports outcomes, paper processing lacks the full market-event loop, and
+independent probes reproduce the failures in [the review](audits/phase-4-independent-review.md).
+The historical implementation report remains evidence of its executed checks, not closure of these
+later findings. Real data, contemporary model assessments and forward observation remain separate.
 
-## Phase 5 — derivatives/optional execution (separate approval)
+## Phase 5 — research completion, correctness and operational validation
+
+Detailed instructions: [CODEX_PHASE_5.md](../prompts/CODEX_PHASE_5.md).
+
+- [ ] **5A:** shared complete current-risk policy and fenced alert dispatch; no paid dispatch for
+  already ineligible work; complete frozen request configuration; terminal expired-job recovery.
+- [ ] **5B:** production-engine replay through a shared application path; validated dataset/config
+  identities and immutable research records; bounded output/state and atomic checkpoint recovery.
+- [ ] **5C:** real per-arm readiness/entry, pre-entry invalidation, complete path/partial-bar policy,
+  truthful outcome contracts and hand-checkable costs wired into public evaluation.
+- [ ] **5D:** unique-opportunity/revision policy, operational filter comparisons including known
+  abstentions, past-only training, protected holdout and actual partition-aware reports.
+- [ ] **5E:** paper events persisted before eligible entry; state/identity/chronology invariants;
+  market-event progression, source-generation cursors and restart/gap handling.
+- [ ] **5F:** authenticated experiment/engine/arm/paper views, authoritative complete exports,
+  consistent CLI/API/UI evidence, native Windows instructions and honest readiness gates.
+
+Acceptance requires two complete public-command hypothetical workflows, one Gold and one BTC,
+plus a six-engine replay/live-style parity matrix. Helper tests alone cannot close the milestone.
+Keep all external operations default off; software verification is separate from weeks of empirical
+observation. Do not claim accuracy, profitability or destination deployment from fixture results.
+
+## Deferred follow-up — derivatives and optional execution
+
+The earlier roadmap called this Phase 5. It is deferred until the current research acceptance gaps
+are closed. Execution continues to require a separate design, review and explicit authorization.
+
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.
 20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's initial scope.
 
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
-- M3: implemented with a passing fixture baseline; independent review acceptance remains blocked
-  by the findings assigned to 4A. Live provider/model entitlement, paid-call behavior, Slack delivery,
-  Windows installation and extended market soak remain separate operator acceptance gates.
-- M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
+- M3: original Phase 3 reproductions are corrected; the remaining dispatch/configuration/recovery
+  findings are assigned to 5A. Live provider access, delivery and Windows operation remain separate.
+- M4: incomplete pending integrated replay, valid outcomes/partitions/comparisons and prospective
+  paper processing. Empirical net-of-cost results require adequate real unseen data.
+- M5: public research workflows and recovery gates verified; evidence states distinguish software,
+  data/model coverage, forward observation and deployment. No automatic transition to trading.

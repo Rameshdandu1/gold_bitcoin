@@ -1,12 +1,16 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
-## Phase 4 research infrastructure
+## Research implementation and review status
 
-Phase 4 adds offline, evidence-versioned historical replay and a prospective paper ledger. The
-research path uses separate SQLite files and has no provider, notification, account or order client.
-It does not establish strategy accuracy or profitability: the committed dataset is a two-record
-synthetic fixture used only to verify software behavior. Genuine historical AI assessments remain
-`UNAVAILABLE`; missing evidence is never replaced by invented model decisions.
+Phase 4 adds an availability timeline, outcome/statistics helpers, isolated research stores and a
+paper decision importer. The [independent Phase 4 review](docs/audits/phase-4-independent-review.md)
+finds that the public replay/evaluation/paper commands do not yet form the complete strategy workflow,
+and reproduces outcome, time-validation, comparison and delivery defects. Follow
+[CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md) to complete and validate that workflow.
+
+The research path uses separate SQLite files and has no provider, notification, account or order
+client. The committed two-record dataset is a synthetic software fixture; it establishes no
+strategy performance. Genuine historical AI assessments remain `UNAVAILABLE`.
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest tests\fixtures\research\manifest.json
@@ -21,12 +25,14 @@ synthetic fixture used only to verify software behavior. Genuine historical AI a
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-21):** Phase 4 software and synthetic-fixture checks are implemented. The
-[independent Phase 3 findings](docs/audits/phase-3-independent-review.md) have regressions and fixes;
-availability replay, execution-aware labels, arm comparisons and prospective paper state are now
-present. Live provider/model entitlement, adequate licensed historical data, genuine historical AI
-assessments, Slack delivery, weeks of paper observation, Windows Server installation, market-data
-soak and strategy performance remain unverified.
+**Review status (2026-11-21):** Phase 4 is merged and its **206-test baseline passes**. The original
+Phase 3 counterexamples have verified corrections, but independent acceptance remains open. The
+review identifies incomplete strategy replay/paper integration, unsupported outcome labels,
+future/holdout leakage, comparison/provenance gaps, and remaining dispatch/recovery defects.
+The next milestone is Phase 5 research completion and validation. These documents are instructions,
+not completed fixes. Derivatives/optional execution is deferred. Live provider entitlement, adequate
+licensed data, contemporary AI assessments, real delivery, weeks of paper observation, destination
+Windows deployment and strategy performance remain unverified.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,
@@ -178,7 +184,7 @@ No `DELTA_API_KEY` is needed for public market data; do not give trading permiss
   use a restricted HTTPS reverse proxy/VPN for remote access. See the Windows runbook.
 
 Model agreement and passing software tests are not accuracy, probability, profitability, or trading
-advice. Phase 4 must perform time-ordered historical evaluation and paper trading.
+advice. Phase 5 must complete and validate time-ordered evaluation and prospective paper research.
 
 See the [initial codebase audit](docs/audits/initial-codebase-audit.md) for the measured baseline,
 live discovery timestamp and remaining unverified operational work. Architecture and operating
@@ -190,13 +196,15 @@ references are in [DESIGN.md](DESIGN.md),
 [the Phase 2 verification report](docs/audits/phase-2-verification.md),
 [the independent Phase 2 review](docs/audits/phase-2-independent-review.md),
 [the independent Phase 3 review](docs/audits/phase-3-independent-review.md),
+[the independent Phase 4 review](docs/audits/phase-4-independent-review.md),
 [the security policy](docs/SECURITY.md), and
 [the Windows runbook](docs/WINDOWS_DEPLOYMENT.md); the ordered backlog is the
 [implementation plan](docs/IMPLEMENTATION_PLAN.md). Contributors and coding agents should start
 with [AGENTS.md](AGENTS.md), [CODEX_START_HERE.md](prompts/CODEX_START_HERE.md) and
 [CODEX_TASK.md](prompts/CODEX_TASK.md). Phase instructions are in
 [CODEX_PHASE_2.md](prompts/CODEX_PHASE_2.md), [CODEX_PHASE_3.md](prompts/CODEX_PHASE_3.md) and
-[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md). Release history is recorded in [CHANGELOG.md](CHANGELOG.md).
+[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md) and [CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md).
+Release history is recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Run quality checks
 

@@ -5,30 +5,31 @@ review and Slack alerts; all external paths are disabled by default and order ex
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
-## Phase 4 evidence architecture
+## Research target and current implementation
 
-Historical observations carry exchange time and factual `available_at_utc`; replay orders by
-availability time, persistence sequence, event-kind priority and immutable event ID. Dataset
-manifests pin file hashes/counts, instruments, source coverage/gaps, code/rule versions, provenance
-and data mode. A rolling hash and atomic checkpoint make resume deterministic without revealing
-corrections before their recorded arrival.
+Historical observations carry exchange time and factual `available_at_utc`. The current Phase 4
+timeline orders observations by availability, persistence sequence, kind and event ID. It records
+visibility and a rolling hash but does not run the production engines. Manifests include file
+checksums and provenance; canonical dataset/config identity and portable checkpoint integrity still
+need the corrections in the independent review.
 
-`research.sqlite3` stores experiment inputs, replay points, common-opportunity arm records and
-reports. `paper.sqlite3` stores prospective decisions before outcomes, cursors and gaps. Both reject
-the production database path and never use production review/outbox tables.
+`research.sqlite3` stores experiment inputs, replay points, imported opportunity records and
+reports. `paper.sqlite3` stores local decision imports, outcome rows, cursors and gaps. Insertion
+order alone does not establish prospective entry/outcome chronology. Both reject an explicitly
+equal production database path and have no production review/outbox integration.
 
-Every arm enters at its actual decision-ready time. Long entries use ask and exits bid; shorts use
-bid and exits ask. Tick rounding/slippage are adverse, fees cover both sides, instrument contract
-units are versioned, and required funding fails closed. Outcomes preserve `NO_ENTRY`, target, stop,
-time exit, `AMBIGUOUS` and `INCOMPLETE`. Folds keep all opportunity revisions/arms together and
-purge overlapping label-information intervals with a time embargo.
+Required semantics: each arm enters after factual readiness and one configured execution delay;
+longs enter ask/exit bid and shorts enter bid/exit ask. Costs/units must be explicit, path coverage
+must be complete or uncertain, and chronological development/test/holdout policy must govern actual
+reports. The current helpers contain timing, coverage, fold and aggregation defects; their presence
+does not establish these guarantees.
 
-**Independent review:** the original Phase 2 counterexamples and the subsequent
-[Phase 3 review](docs/audits/phase-3-independent-review.md) findings have regression coverage and
-Phase 4 corrections. Architectural requirements remain distinct from empirical acceptance: live
-providers, licensed data, prospective duration and deployment are not proven by fixtures. Follow
-[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md), starting with corrective slice 4A. Passing fixtures are
-not evidence of live provider readiness or strategy performance.
+**Independent review:** the original Phase 3 examples have verified corrections and the Phase 4
+baseline passes 206 tests. The [independent Phase 4 review](docs/audits/phase-4-independent-review.md)
+documents remaining correctness defects and incomplete public workflows. Follow
+[CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md) for shared engine replay, valid outcomes/partitions,
+prospective paper processing and current dispatch/recovery. Passing fixtures do not establish
+live provider readiness, empirical performance or destination Windows deployment.
 
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.
@@ -98,8 +99,9 @@ reward/risk permit them. No result is a learned forecast, probability, AI confir
    reconciliation, book, spread, entry drift, cost and calendar/session policy. Atomically commit the
    decision and revision-scoped outbox intent. `CONFIRMED` is merely an **alert**, NOT an order.
 6. Record candidate revisions, state transitions, invalidation and expiry as append-only rows. Never
-   overwrite history. Historical replay evaluates at each event-time candle close and requires the
-   candle's explicit availability timestamp in addition to event/receive clocks for trades and books.
+   overwrite history. The required shared strategy replay must reproduce observation availability
+   and evaluation cadence while features use event time. The current visibility-only timeline and
+   older candle-close helper do not yet implement that complete workflow.
 
 ### Volatility and performance
 ATR is a scale, not a directional prediction. Naive `ATR * sqrt(horizon / bar_minutes)` is a loose heuristic, not a forecast. Intraday sessions/news cause regime changes. Need walk-forward and purged time-based holdout, bootstrap CIs by day, fees/slippage, and target-before-stop labelling; ambiguous same-bar high/low = conservative loss or separate ambiguous bucket, not automatic win.

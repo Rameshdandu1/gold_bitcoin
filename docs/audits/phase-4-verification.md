@@ -3,6 +3,12 @@
 Status: **SOFTWARE/FIXTURE COMPLETE; EMPIRICAL EVIDENCE INSUFFICIENT**. Passing software tests and
 synthetic outcomes are not accuracy, probability, edge or profitability claims.
 
+**Later independent review (2026-11-21):** this is the historical implementation self-report.
+The [independent Phase 4 review](phase-4-independent-review.md) reproduces additional correctness
+defects and incomplete public workflows, so its SOFTWARE/FIXTURE COMPLETE acceptance is not upheld.
+The check results below remain historical evidence. Follow [CODEX_PHASE_5.md](../../prompts/CODEX_PHASE_5.md)
+for the required completion and correction work.
+
 ## Recorded revisions
 
 - Starting code: `d1978d30e48c0b8656d969da00ea70a7e4659562` (`main`, reviewed Phase 3).
