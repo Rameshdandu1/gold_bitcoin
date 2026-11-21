@@ -1,11 +1,37 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: v0.5 implementation / Phase 6 acceptance corrections pending. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: Design v0.6 / evidence-integrity MVP. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
-## Phase 5 evidence architecture
+## Phase 6 evidence architecture
+
+The alert worker refreshes its clock at each risk attempt and again inside the short dispatch
+authorization transaction. The eligibility token and evaluated trade set use the same receive-time
+cutoff; the authorization records its actual time and evidence freshness deadline. Legacy review
+jobs without the complete frozen request policy are quarantined with a typed zero-call disposition.
+Migration `0006_phase6_evidence_integrity` is additive.
+
+Research preserves provider completion and factual availability separately. Arm readiness uses
+availability, executable quote fills use the later of event and availability time, and arm/outcome
+records retain data/evidence modes and request/configuration identities. Synthetic provider rows
+cannot be relabelled as prospective by changing only a manifest assertion. Quote evaluation proves
+a start anchor and every pre/post-entry gap; OHLC evaluation requires contiguous intervals.
+
+The scheduler evaluates every frozen cadence even during input silence. Source transitions are
+applied at their availability time to provider readiness and outcome eligibility. This closes the
+reviewed dirty-symbol/source-loss counterexamples; complete reuse of production admission and
+durable full-workflow checkpoint/resume remain separate open acceptance gates.
+
+The connected `paper-workflow` command consumes the stored normalized journal and frozen decisions,
+writes decisions before their latency-adjusted eligible entry, and derives outcomes from later
+quotes/source events. Fixture runs are labelled `SIMULATED_PROSPECTIVE`, never prospective elapsed
+observation. The local-stream worker commits each event and cursor atomically and binds progress to
+source identity, generation and a consumed-prefix SHA-256. Ordinary research reads centrally hide
+holdout/crossing outcomes until `final-holdout` records the frozen access identity.
+
+## Phase 5 evidence foundation
 
 The public `run-workflow` command validates the canonical dataset manifest, externally sorts input
 by factual availability, and sends normalized trades, candles, book generations, instruments and
@@ -15,12 +41,11 @@ trades per symbol and 2,000 candles per symbol/resolution and invokes the produc
 order transport.
 
 Candidates, four-arm decisions and their target/configuration identities are immutable records.
-The current implementation derives provider decisions after reading the journal, then evaluates
-quotes. The independent review found that this loses availability clocks/provenance and does not
-reapply the full shared current-risk/lifecycle policy. Quote-side economics are implemented, but
-pre-entry and OHLC coverage gaps remain. Ordinary aggregate evaluation selects one revision per
-opportunity and excludes label intervals entering the frozen holdout; ordinary opportunity detail
-reads still require the same protection. A separate final-holdout command alone is insufficient.
+Phase 6 persists archived-provider decisions when their evidence becomes available, preserves
+their clocks/provenance and revalidates source state before entry. Quote and OHLC evaluation now
+require complete pre-entry and outcome paths. Ordinary aggregate, detail, API and export reads use
+one holdout projection, with deliberate final access recorded before protected results become
+visible. Complete reuse of production admission/lifecycle policy remains an explicit open gate.
 
 Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
 hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,
@@ -28,36 +53,11 @@ seed and variant policy. Checkpoints bind both hashes and validate the consumed 
 retaining only the most recent 128 diagnostic event IDs. Conflicting writes fail instead of
 overwriting scientific history.
 
-The paper ledger binds candidate, revision, arm, target, configuration, declared source identity,
-decision persistence time and eligible-entry time. It rejects several backfill/future-outcome cases.
-The local JSON worker stores generation/count cursor metadata separately from each transition;
-crashes between those commits and same-length file replacement remain unresolved. Its current
-import interface is not yet the connected observation-to-paper-outcome service required for
-acceptance. Historical imports must remain distinct from genuine prospective evidence.
-
-## Phase 6 acceptance contracts
-
-Implement [CODEX_PHASE_6.md](prompts/CODEX_PHASE_6.md) against the
-[independent Phase 5 review](docs/audits/phase-5-independent-review.md):
-
-- Obtain fresh evaluation and authorization time; align evidence tokens with evaluated facts and
-  check expiry, lease and freshness after acquiring the authorization transaction. Keep network
-  delivery outside that transaction.
-- Apply pre-dispatch lifecycle/source/deadline checks to legacy and current-format jobs. Missing
-  frozen legacy request policy requires an explicit migration/disposition.
-- Preserve event/completion, receipt/availability and persistence clocks through research arms and
-  fills. Validate evidence-mode compatibility; retain actual provider/request provenance.
-- Share admission, material revision, lifecycle and market-risk policy across real live-style,
-  historical and paper entry points, including expiry/freshness during input silence.
-- Prove continuous required path coverage and keep missing intervals incomplete. Derive paper
-  outcomes from later evidence; commit transitions with source progress and verify consumed input
-  identity across restart/rotation.
-- Apply one protected-partition policy to details, APIs, exports and aggregate reports. Final
-  access opens and records the holdout; ordinary authenticated reads must not reveal it first.
-
-These are implementation requirements, not claims that the current v0.5 code already satisfies
-them. Existing detector reuse, bounded feature windows, immutable records and isolated databases
-remain useful foundations. Full-workflow resume and bounded total memory require separate proof.
+The paper ledger binds candidate, revision, arm, target, configuration, source identity/generation,
+decision persistence time and eligible-entry time. Prospective entries/outcomes must occur after
+the decision write and be factually available before recording. Historical import remains a
+distinct evidence mode. Phase 6 advances a source-bound cursor in the same transaction as each
+idempotent event and detects replacement, reordering or truncation through a consumed-prefix hash.
 
 ## Phase 4 foundation
 

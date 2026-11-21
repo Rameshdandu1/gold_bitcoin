@@ -4,6 +4,39 @@ All notable changes to this project are documented in this file.
 
 The project uses four-part release versions for shipped milestones.
 
+## [0.6.0.0] - 2026-11-22
+
+### Added
+
+- Preserve provider completion/availability, quote availability and evidence-mode provenance through
+  arm decisions, outcomes, authenticated views and exports; reject incompatible manifest/provider modes.
+- Add cadence-driven source-risk scheduling and a public connected bounded paper workflow that
+  derives simulated outcomes from later normalized observations for all six Gold/BTC engines.
+- Add additive Phase 6 dispatch evidence migration, versioned research outcomes, consumed-prefix
+  paper progress and central holdout-aware read projections.
+
+### Fixed
+
+- Refresh alert risk/authorization clocks, align trade snapshot cutoffs with evidence tokens and
+  recheck freshness/lease/expiry inside the dispatch transaction.
+- Quarantine legacy jobs lacking complete frozen request policy before any provider call.
+- Reject missing pre-entry anchors, quote gaps and non-contiguous OHLC paths; use factual
+  availability for readiness/fills and propagate source outages as abstentions/incomplete outcomes.
+- Commit paper events and progress atomically, recover identical late retries, and detect same-size
+  consumed-file replacement before success.
+- Withhold protected and boundary-crossing holdout outcomes from ordinary authenticated reads until
+  the explicit final-evaluation access record exists.
+
+### Evidence and safety
+
+- Verification uses zero-network `SYNTHETIC_FIXTURE` streams, archived fake provider rows and fake
+  notification transports. Connected paper results are `SIMULATED_PROSPECTIVE`, not elapsed forward
+  observation or empirical performance.
+- Full production-worker/shared-service parity, complete derived-workflow checkpoint/resume, licensed
+  data, genuine provider access, destination Windows recovery and external soaks remain unverified.
+- Live ingestion, AI, alerts and paper collection stay disabled by default. Orders remain absent and
+  `TRADING_ENABLED=true` remains refused.
+
 ## [0.5.0.0] - 2026-11-21
 
 ### Added

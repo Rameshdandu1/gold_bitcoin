@@ -1,37 +1,29 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
-## Current review and next implementation phase
+## Phase 6 evidence-integrity workflow
 
-**Phase 5 is implemented; independent software acceptance remains incomplete.** The review of
-merged PR #8 at `dfbb59ea91bfc034f4ab4ffa76c0dbda094f5a31` passed 227 Python tests and the frontend
-checks, then reproduced seven timing, evidence, recovery, holdout and upgrade issues. Read the
-[independent Phase 5 review](docs/audits/phase-5-independent-review.md) and implement
-[CODEX_PHASE_6.md](prompts/CODEX_PHASE_6.md). Phase 6 closes these contracts and demonstrates the
-complete shared decision/paper workflow. Derivatives and execution remain deferred.
-
-## Phase 5 research-completion workflow
-
-Phase 5 connects normalized observations to the production six-engine detector, stored four-arm
-decisions, quote-side outcome evaluation, development partitions, exports and a paper event ledger.
-The independent review found that downstream availability/provenance, full lifecycle/risk parity,
-path coverage, protected detail reads and paper recovery need further correction. Research and
-paper state remain isolated from production review, budget and notification state. The generator
-creates explicitly synthetic Gold/BTC software-verification streams; it does not establish strategy
-accuracy or profitability.
+Phase 6 preserves factual event/completion/availability clocks and evidence modes from normalized
+input through the six-engine detector, frozen four-arm decisions, quote-side outcomes, protected
+partitions, exports and a connected paper ledger. Research and paper state remain isolated from
+production review, budget and notification state. The included generator creates explicitly
+synthetic Gold/BTC verification streams; it does not establish strategy accuracy or profitability.
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures
 .\.venv\Scripts\python.exe -m marketintel.research validate-data --manifest data\phase5-fixtures\gold-manifest.json
 .\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3
+.\.venv\Scripts\python.exe -m marketintel.research paper-workflow --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research evaluate --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
 ```
 
-Repeat `run-workflow`, `evaluate` and `report` with the generated BTC manifest/config and
-`phase5-btc-workflow-v1`. Existing tests run all six real detectors with explicitly synthetic
-completions. This proves detector integration, not the complete live-style decision path. The
-separate paper worker currently consumes local decision/outcome JSON and is bounded and disabled;
-Phase 6 requires connected outcome derivation and interrupted-process recovery:
+Repeat `run-workflow`, `paper-workflow`, `evaluate` and `report` with the generated BTC manifest/config and
+`phase5-btc-workflow-v1`. Acceptance tests run all six real detectors; fixture provider completions
+remain labelled `SYNTHETIC_FIXTURE`. `paper-workflow` is explicitly
+`SIMULATED_PROSPECTIVE`: it durably records decisions before eligible fixture entry and derives
+outcomes from later normalized quotes. It is not elapsed real-time prospective evidence. Missing
+genuine assessments stay `UNAVAILABLE`. The external local-stream importer is separately bounded
+and disabled:
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
@@ -44,13 +36,15 @@ Phase 6 requires connected outcome derivation and interrupted-process recovery:
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-21):** many original Phase 4 counterexamples now pass, including new-format
-provider preflight/configuration, expired-result recovery, known pre-entry breaches and corrected
-development comparisons. The [Phase 5 review](docs/audits/phase-5-independent-review.md) records
-what is fixed and what remains open as P5-01–P5-07. Live provider/model entitlement, adequate licensed
-historical data, genuine contemporary AI assessments, Slack delivery, prospective observation
-duration, destination Windows Server recovery, market-data soak and empirical strategy performance
-remain separate unverified gates.
+**Review status (2026-11-22):** Phase 6 closes the demonstrated P5-01, P5-02, P5-04, P5-05,
+P5-06 and P5-07 defects and the concrete P5-03 source/scheduling counterexamples with worker,
+store and public-command regressions. Full production-worker/shared-service parity and durable
+full-workflow checkpoint/resume remain explicit acceptance limitations. See the
+[independent Phase 5 review](docs/audits/phase-5-independent-review.md) and
+[Phase 6 verification](docs/audits/phase-6-verification.md). Live provider/model
+entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
+prospective observation duration, destination Windows Server recovery, market-data soak and
+empirical strategy performance remain unverified.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,
@@ -221,7 +215,8 @@ references are in [DESIGN.md](DESIGN.md),
 with [AGENTS.md](AGENTS.md), [CODEX_START_HERE.md](prompts/CODEX_START_HERE.md) and
 [CODEX_TASK.md](prompts/CODEX_TASK.md). Phase instructions are in
 [CODEX_PHASE_2.md](prompts/CODEX_PHASE_2.md), [CODEX_PHASE_3.md](prompts/CODEX_PHASE_3.md) and
-[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md) and [CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md).
+[CODEX_PHASE_4.md](prompts/CODEX_PHASE_4.md), [CODEX_PHASE_5.md](prompts/CODEX_PHASE_5.md) and
+[CODEX_PHASE_6.md](prompts/CODEX_PHASE_6.md).
 Release history is recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Run quality checks

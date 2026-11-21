@@ -12,16 +12,23 @@ import hashlib
 import html
 import json
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from marketintel.research_engine import run_shared_workflow
 from marketintel.research_evaluation import (
     arm_metrics,
+    evaluate_quotes,
     paired_day_block_difference,
     purged_folds,
 )
-from marketintel.research_models import ExperimentConfig, OpportunityRecord, ReplayCheckpoint
+from marketintel.research_models import (
+    ExperimentConfig,
+    OpportunityRecord,
+    ReplayCheckpoint,
+    ReplayObservation,
+)
 from marketintel.research_replay import (
     iter_observations,
     load_manifest,
@@ -29,7 +36,7 @@ from marketintel.research_replay import (
     spool_observations,
     write_checkpoint,
 )
-from marketintel.research_storage import ResearchStore
+from marketintel.research_storage import PaperLedger, ResearchStore
 
 
 def _load_config(path: Path) -> ExperimentConfig:
@@ -156,6 +163,166 @@ def command_run_workflow(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_paper_workflow(args: argparse.Namespace) -> int:
+    """Derive simulated prospective paper outcomes from later normalized observations."""
+    if args.processing_delay_ms < 0 or args.entry_latency_ms < 0:
+        raise ValueError("Paper processing and entry latency must be non-negative")
+    if args.maximum_events is not None and args.maximum_events < 1:
+        raise ValueError("Paper maximum-events must be positive")
+    store = ResearchStore(
+        Path(args.database).resolve(), production_path=Path(args.production_database).resolve()
+    )
+    experiment = store.experiment(args.experiment_id)
+    if experiment is None:
+        raise ValueError("Experiment does not exist; run the shared workflow first")
+    manifest, config = experiment
+    ledger = PaperLedger(
+        Path(args.paper_database).resolve(),
+        production_path=Path(args.production_database).resolve(),
+    )
+    observations = store.observations(args.experiment_id)
+    if args.maximum_events is not None:
+        observations = observations[: args.maximum_events]
+    if not observations:
+        print(json.dumps({"status": "NO_OBSERVATIONS", **ledger.summary()}, sort_keys=True))
+        return 0
+    horizon = observations[-1].available_at_utc
+    processing_delay = timedelta(milliseconds=args.processing_delay_ms)
+    entry_latency_ms = max(args.entry_latency_ms, args.processing_delay_ms + 1)
+    candidates = store.candidates(args.experiment_id)
+    decisions = {
+        (candidate.opportunity_id, candidate.revision_id): store.arm_decisions(
+            args.experiment_id, candidate.opportunity_id, candidate.revision_id
+        )
+        for candidate in candidates
+    }
+    timeline: list[tuple[datetime, int, str, object]] = [
+        (row.available_at_utc, 0, row.observation_id, row) for row in observations
+    ]
+    for candidate in candidates:
+        for arm in decisions[(candidate.opportunity_id, candidate.revision_id)]:
+            persist_at = arm.ready_at_utc + processing_delay
+            if persist_at <= horizon:
+                timeline.append(
+                    (
+                        persist_at,
+                        1,
+                        f"{candidate.opportunity_id}:{candidate.revision_id}:{arm.arm}",
+                        (candidate, arm),
+                    )
+                )
+        if candidate.expires_at_utc <= horizon:
+            timeline.append(
+                (
+                    candidate.expires_at_utc,
+                    2,
+                    f"expiry:{candidate.opportunity_id}:{candidate.revision_id}",
+                    candidate,
+                )
+            )
+    timeline.sort(key=lambda item: (item[0], item[1], item[2]))
+    persisted: set[tuple[str, str, str]] = set()
+    resolved: set[tuple[str, str, str]] = set()
+    visible_transitions: dict[str, list[tuple[datetime, str]]] = {}
+
+    def attempt_outcomes(at) -> None:
+        for candidate in candidates:
+            source_rows = tuple(visible_transitions.get(candidate.symbol, ()))
+            quotes = [
+                quote
+                for quote in store.quotes(
+                    args.experiment_id,
+                    candidate.symbol,
+                    opportunity_id=candidate.opportunity_id,
+                )
+                if (quote.available_at_utc or quote.observed_at_utc) <= at
+            ]
+            for arm in decisions[(candidate.opportunity_id, candidate.revision_id)]:
+                identity = (candidate.opportunity_id, candidate.revision_id, arm.arm)
+                if identity not in persisted or identity in resolved:
+                    continue
+                outcome = evaluate_quotes(
+                    candidate,
+                    arm,
+                    next(
+                        version
+                        for version in manifest.instruments
+                        if version.symbol == candidate.symbol
+                        and version.product_id == candidate.product_id
+                    ),
+                    quotes,
+                    config.cost_policy,
+                    target_index=config.target_index,
+                    entry_latency_ms=entry_latency_ms,
+                    source_transitions=source_rows,
+                    evaluated_through_utc=at,
+                ).model_copy(update={"market_data_mode": manifest.data_mode})
+                terminal = outcome.code in {
+                    "NO_ENTRY",
+                    "TARGET_BEFORE_STOP",
+                    "STOP_BEFORE_TARGET",
+                    "TIME_EXIT",
+                    "AMBIGUOUS",
+                } or outcome.reason.startswith("SOURCE_UNAVAILABLE")
+                if at >= candidate.expires_at_utc:
+                    terminal = True
+                if not terminal:
+                    continue
+                ledger.record_outcome(
+                    candidate.revision_id,
+                    outcome,
+                    recorded_at=max(
+                        at + processing_delay,
+                        outcome.exit_at_utc or at + processing_delay,
+                    ),
+                )
+                resolved.add(identity)
+
+    for at, _, _, item in timeline:
+        if isinstance(item, tuple):
+            candidate, arm = item
+            ledger.record_decision(
+                candidate.opportunity_id,
+                candidate.revision_id,
+                arm,
+                candidate=candidate,
+                config_hash=config.canonical_config_hash(),
+                target_index=config.target_index,
+                source_identity=manifest.content_hash,
+                evidence_mode="SIMULATED_PROSPECTIVE",
+                entry_latency_ms=entry_latency_ms,
+                recorded_at=at,
+            )
+            persisted.add((candidate.opportunity_id, candidate.revision_id, arm.arm))
+        elif isinstance(item, ReplayObservation) and item.kind == "SOURCE_TRANSITION":
+            visible_transitions.setdefault(item.symbol, []).append(
+                (item.available_at_utc, str(item.payload["state"]))
+            )
+        attempt_outcomes(at)
+    summary = ledger.summary()
+    paper_status = (
+        "SIMULATED_PROSPECTIVE_COMPLETE"
+        if summary["decisions"] == summary["outcomes"]
+        else "SIMULATED_PROSPECTIVE_PARTIAL"
+    )
+    print(
+        json.dumps(
+            {
+                **summary,
+                "status": paper_status,
+                "experiment_id": args.experiment_id,
+                "data_mode": manifest.data_mode,
+                "source_identity": manifest.content_hash,
+                "events_consumed": len(observations),
+                "processing_delay_ms": args.processing_delay_ms,
+                "entry_latency_ms": entry_latency_ms,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def command_evaluate(args: argparse.Namespace) -> int:
     store = ResearchStore(
         Path(args.database).resolve(), production_path=Path(args.production_database).resolve()
@@ -233,7 +400,7 @@ def command_final_holdout(args: argparse.Namespace) -> int:
     )
     selected: dict[str, OpportunityRecord] = {}
     for row in sorted(
-        store.opportunities(args.experiment_id),
+        store.opportunities(args.experiment_id, include_protected=True),
         key=lambda item: (item.observed_at_utc, item.revision_id),
     ):
         selected[row.opportunity_id] = row
@@ -320,7 +487,7 @@ def command_report(args: argparse.Namespace) -> int:
                 }
             )
     markdown = (
-        "# Phase 5 research report\n\n"
+        "# Research evidence report\n\n"
         + summary["warning"]
         + "\n\n```json\n"
         + json.dumps(summary, indent=2, sort_keys=True)
@@ -329,7 +496,7 @@ def command_report(args: argparse.Namespace) -> int:
     (output / "report.md").write_text(markdown, encoding="utf-8")
     (output / "report.html").write_text(
         "<!doctype html><meta charset='utf-8'><title>Research report</title>"
-        "<h1>Phase 5 research report</h1><p>"
+        "<h1>Research evidence report</h1><p>"
         + html.escape(summary["warning"])
         + "</p><pre>"
         + html.escape(json.dumps(summary, indent=2, sort_keys=True))
@@ -374,6 +541,15 @@ def parser() -> argparse.ArgumentParser:
     workflow.add_argument("--production-database", default="data/marketintel.sqlite3")
     workflow.add_argument("--chunk-size", type=int, default=2_000)
     workflow.set_defaults(handler=command_run_workflow)
+    paper = commands.add_parser("paper-workflow")
+    paper.add_argument("--database", required=True)
+    paper.add_argument("--paper-database", required=True)
+    paper.add_argument("--production-database", default="data/marketintel.sqlite3")
+    paper.add_argument("--experiment-id", required=True)
+    paper.add_argument("--maximum-events", type=int)
+    paper.add_argument("--processing-delay-ms", type=int, default=100)
+    paper.add_argument("--entry-latency-ms", type=int, default=250)
+    paper.set_defaults(handler=command_paper_workflow)
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument("--database", required=True)
     evaluate.add_argument("--production-database", default="data/marketintel.sqlite3")

@@ -55,6 +55,7 @@ class ProviderCompletion(BaseModel):
     decision: Literal["CONFIRM", "REJECT", "WAIT"]
     supported_target_indices: tuple[int, ...] = ()
     completed_at_utc: datetime
+    available_at_utc: datetime | None = None
     request_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     configuration_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     provider_latency_ms: int = Field(ge=0)
@@ -67,6 +68,11 @@ class ProviderCompletion(BaseModel):
     def completion_is_aware(self) -> ProviderCompletion:
         if self.completed_at_utc.tzinfo is None or self.completed_at_utc.utcoffset() is None:
             raise ValueError("Provider completion time must be timezone aware")
+        if self.available_at_utc is not None:
+            if self.available_at_utc.tzinfo is None or self.available_at_utc.utcoffset() is None:
+                raise ValueError("Provider availability time must be timezone aware")
+            if self.available_at_utc < self.completed_at_utc:
+                raise ValueError("Provider result cannot be available before completion")
         if len(set(self.supported_target_indices)) != len(self.supported_target_indices):
             raise ValueError("Provider target identities must be unique")
         if any(index < 1 for index in self.supported_target_indices):
@@ -166,6 +172,9 @@ class SharedResearchEngine:
         self.book_sequences: dict[str, tuple[int, int]] = {}
         self.provider_completions: dict[tuple[str, str, str], ProviderCompletion] = {}
         self.source_states: dict[str, SourceTransition] = {}
+        self.source_history: dict[str, deque[tuple[datetime, SourceTransition]]] = defaultdict(
+            lambda: deque(maxlen=10_000)
+        )
         self.dirty_symbols: set[str] = set()
         self.maximum_trade_state = 0
         self.maximum_candle_state = 0
@@ -230,9 +239,23 @@ class SharedResearchEngine:
             self.dirty_symbols.add(row.symbol)
             return
         if row.kind == "PROVIDER_COMPLETION":
+            if payload.get("available_at_utc") is None:
+                payload["available_at_utc"] = row.available_at_utc
             completion = ProviderCompletion.model_validate(payload)
             if completion.completed_at_utc > row.available_at_utc:
                 raise ValueError("Provider completion cannot be available before completion")
+            allowed_modes = {
+                "SYNTHETIC_FIXTURE": {"SYNTHETIC_FIXTURE"},
+                "DOWNLOADED_OHLC": {"RETROSPECTIVE_LLM_EXPLORATORY"},
+                "RECORDED_AS_OBSERVED": {
+                    "RECORDED_PROSPECTIVE_MODEL",
+                    "RETROSPECTIVE_LLM_EXPLORATORY",
+                },
+                "RECORDED_PROSPECTIVE_MODEL": {"RECORDED_PROSPECTIVE_MODEL"},
+                "RETROSPECTIVE_LLM_EXPLORATORY": {"RETROSPECTIVE_LLM_EXPLORATORY"},
+            }
+            if completion.evidence_mode not in allowed_modes[self.manifest.data_mode]:
+                raise ValueError("Provider evidence mode is incompatible with dataset mode")
             key = (completion.candidate_id, completion.revision_id, completion.provider)
             prior = self.provider_completions.get(key)
             if prior is not None and prior != completion:
@@ -248,6 +271,7 @@ class SharedResearchEngine:
             if prior is not None and transition.generation < prior.generation:
                 raise ValueError("Source recovery generation moved backward")
             self.source_states[row.symbol] = transition
+            self.source_history[row.symbol].append((row.available_at_utc, transition))
             self.dirty_symbols.add(row.symbol)
             return
         if row.kind == "EXPIRY":
@@ -335,7 +359,8 @@ def _provider_decision(
     completion: ProviderCompletion | None,
     arm: Literal["RULES_PLUS_GPT", "RULES_PLUS_CLAUDE"],
 ) -> ArmDecision:
-    if completion is None or completion.completed_at_utc > candidate.expires_at_utc:
+    available_at = completion.available_at_utc if completion is not None else None
+    if completion is None or available_at is None or available_at > candidate.expires_at_utc:
         return ArmDecision(
             arm=arm,
             state="UNAVAILABLE",
@@ -348,10 +373,16 @@ def _provider_decision(
         return ArmDecision(
             arm=arm,
             state="UNAVAILABLE",
-            ready_at_utc=completion.completed_at_utc,
+            ready_at_utc=available_at,
             reason="Archived assessment request/configuration identity mismatch",
             provider_latency_ms=completion.provider_latency_ms,
             attributable_cost_microusd=completion.attributable_cost_microusd,
+            evidence_mode=completion.evidence_mode,
+            provider=completion.provider,
+            provider_completed_at_utc=completion.completed_at_utc,
+            provider_available_at_utc=available_at,
+            request_digest=completion.request_digest,
+            configuration_digest=completion.configuration_digest,
         )
     if completion.decision == "CONFIRM" and config.target_index not in (
         completion.supported_target_indices
@@ -367,10 +398,16 @@ def _provider_decision(
     return ArmDecision(
         arm=arm,
         state=state,
-        ready_at_utc=completion.completed_at_utc,
+        ready_at_utc=available_at,
         reason=reason,
         provider_latency_ms=completion.provider_latency_ms,
         attributable_cost_microusd=completion.attributable_cost_microusd,
+        evidence_mode=completion.evidence_mode,
+        provider=completion.provider,
+        provider_completed_at_utc=completion.completed_at_utc,
+        provider_available_at_utc=available_at,
+        request_digest=completion.request_digest,
+        configuration_digest=completion.configuration_digest,
     )
 
 
@@ -378,12 +415,15 @@ def _decisions(
     candidate: ResearchCandidate,
     config: ExperimentConfig,
     completions: dict[tuple[str, str, str], ProviderCompletion],
+    market_data_mode=None,
+    source_history: tuple[tuple[datetime, SourceTransition], ...] = (),
 ) -> tuple[ArmDecision, ...]:
     rules = ArmDecision(
         arm="RULES_ONLY",
         state="APPROVED",
         ready_at_utc=candidate.observed_at_utc,
         reason="Production quantitative engine emitted CANDIDATE",
+        evidence_mode=market_data_mode,
     )
     gpt = _provider_decision(
         candidate,
@@ -397,6 +437,23 @@ def _decisions(
         completions.get((candidate.opportunity_id, candidate.revision_id, "CLAUDE")),
         "RULES_PLUS_CLAUDE",
     )
+
+    def apply_source_gate(decision: ArmDecision) -> ArmDecision:
+        visible = [row for row in source_history if row[0] <= decision.ready_at_utc]
+        if decision.state != "APPROVED" or not visible or visible[-1][1].state == "AVAILABLE":
+            return decision
+        return decision.model_copy(
+            update={
+                "state": "WAIT",
+                "reason": (
+                    "Current source state at provider readiness was "
+                    f"{visible[-1][1].state}: {visible[-1][1].reason}"
+                ),
+            }
+        )
+
+    gpt = apply_source_gate(gpt)
+    claude = apply_source_gate(claude)
     ready = max(gpt.ready_at_utc, claude.ready_at_utc)
     if "UNAVAILABLE" in {gpt.state, claude.state}:
         state = "UNAVAILABLE"
@@ -419,6 +476,8 @@ def _decisions(
         attributable_cost_microusd=(
             gpt.attributable_cost_microusd + claude.attributable_cost_microusd
         ),
+        evidence_mode=(gpt.evidence_mode if gpt.evidence_mode == claude.evidence_mode else None),
+        provider="DUAL",
     )
     return rules, gpt, claude, dual
 
@@ -464,6 +523,41 @@ def run_shared_workflow(
     evaluations = 0
     observations_count = 0
 
+    def persist_available_provider_decisions(at: datetime) -> None:
+        for candidate in store.candidates(config.experiment_id):
+            rows = _decisions(
+                candidate,
+                config,
+                state.provider_completions,
+                manifest.data_mode,
+                tuple(state.source_history[candidate.symbol]),
+            )
+            keys = {
+                "RULES_PLUS_GPT": (candidate.opportunity_id, candidate.revision_id, "GPT"),
+                "RULES_PLUS_CLAUDE": (
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    "CLAUDE",
+                ),
+            }
+            for decision in rows[1:]:
+                required = (
+                    tuple(keys.values())
+                    if decision.arm == "RULES_PLUS_DUAL"
+                    else (keys[decision.arm],)
+                )
+                if not all(key in state.provider_completions for key in required):
+                    continue
+                if decision.ready_at_utc > at:
+                    continue
+                store.save_arm_decision(
+                    config.experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    decision,
+                    persisted_at=at,
+                )
+
     def evaluate(at: datetime) -> None:
         nonlocal generated, evaluations
         for result, instrument in state.evaluate(at):
@@ -485,7 +579,7 @@ def run_shared_workflow(
                 candidate,
                 persisted_at=at,
             )
-            rules = _decisions(candidate, config, {})[0]
+            rules = _decisions(candidate, config, {}, manifest.data_mode)[0]
             store.save_arm_decision(
                 config.experiment_id,
                 candidate.opportunity_id,
@@ -505,10 +599,11 @@ def run_shared_workflow(
         while next_evaluation < row.available_at_utc and (
             next_evaluation <= config.evaluation_end_utc
         ):
-            if state.dirty_symbols:
-                evaluate(next_evaluation)
+            evaluate(next_evaluation)
             next_evaluation += cadence
         state.apply(row)
+        if row.kind in {"PROVIDER_COMPLETION", "SOURCE_TRANSITION"}:
+            persist_available_provider_decisions(row.available_at_utc)
         journal_batch.append(row)
         if len(journal_batch) >= 500:
             store.save_observations(config.experiment_id, journal_batch)
@@ -516,13 +611,18 @@ def run_shared_workflow(
     if journal_batch:
         store.save_observations(config.experiment_id, journal_batch)
     while next_evaluation <= config.evaluation_end_utc:
-        if state.dirty_symbols:
-            evaluate(next_evaluation)
+        evaluate(next_evaluation)
         next_evaluation += cadence
 
     records: list[OpportunityRecord] = []
     for candidate in store.candidates(config.experiment_id):
-        decisions = _decisions(candidate, config, state.provider_completions)
+        decisions = _decisions(
+            candidate,
+            config,
+            state.provider_completions,
+            manifest.data_mode,
+            tuple(state.source_history[candidate.symbol]),
+        )
         for decision in decisions:
             store.save_arm_decision(
                 config.experiment_id,
@@ -548,7 +648,9 @@ def run_shared_workflow(
                 config.cost_policy,
                 target_index=config.target_index,
                 entry_latency_ms=config.entry_latency_ms,
+                source_transitions=tuple(state.source_history[candidate.symbol]),
             )
+            outcome = outcome.model_copy(update={"market_data_mode": manifest.data_mode})
             store.save_outcome(
                 config.experiment_id,
                 candidate.revision_id,
@@ -567,6 +669,7 @@ def run_shared_workflow(
                     decision_ready_at_utc=decision.ready_at_utc,
                     provider_latency_ms=decision.provider_latency_ms,
                     attributable_cost_microusd=decision.attributable_cost_microusd,
+                    evidence_mode=decision.evidence_mode,
                     reason=decision.reason,
                     outcome=outcome,
                 )
@@ -581,6 +684,7 @@ def run_shared_workflow(
             label_information_start_utc=candidate.observed_at_utc,
             label_information_end_utc=label_end,
             quantitatively_eligible=True,
+            market_data_mode=manifest.data_mode,
             arms=tuple(arm_rows),
         )
         store.save_opportunity(config.experiment_id, record)

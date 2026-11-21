@@ -144,9 +144,9 @@ Detailed instructions: [CODEX_PHASE_5.md](../prompts/CODEX_PHASE_5.md).
 These checkboxes record Phase 5 implementation delivery and its original synthetic checks. They
 do not close independent acceptance: the
 [Phase 5 review](audits/phase-5-independent-review.md) reproduced P5-01–P5-07 at
-`dfbb59ea91bfc034f4ab4ffa76c0dbda094f5a31`. Its 227-test baseline and public six-detector workflow
-pass, while authorization time, evidence clocks/provenance, complete shared policy, path coverage,
-paper recovery, holdout detail protection and legacy upgrade handling require Phase 6.
+`dfbb59ea91bfc034f4ab4ffa76c0dbda094f5a31`. Phase 6 below records the implemented dispositions
+and preserves the remaining shared-policy, full-resume and operational gates without rewriting the
+historical Phase 5 evidence.
 
 Adequate licensed market history, genuine contemporary provider completions, extended prospective
 observation, live integration soaks and destination-host recovery remain separate gates.
@@ -155,33 +155,36 @@ observation, live integration soaks and destination-host recovery remain separat
 
 Detailed instructions: [CODEX_PHASE_6.md](../prompts/CODEX_PHASE_6.md).
 
-- [ ] **6A:** correct advancing-clock alert authorization and evidence-cutoff alignment; apply
-  preflight to upgraded legacy jobs and explicitly disposition incomplete frozen request policy.
-- [ ] **6B:** preserve quote/provider availability and evidence provenance through all projections;
-  reject contradictory modes and establish complete pre-entry/quote/OHLC path coverage.
-- [ ] **6C:** share admission/material revision/lifecycle/current-risk policy across live-style,
-  historical and connected paper entry points; prove six-engine parity, silence transitions,
-  interrupted full-workflow resume and bounded total memory.
-- [ ] **6D:** make paper transition/progress recovery atomic or equivalently recoverable; preserve
-  immutable retry chronology and verify physical/logical source identity and consumed prefix.
-- [ ] **6E:** protect unopened holdout outcomes across authenticated details, APIs, UI and exports;
-  retain deliberate audited opening and unchanged development metrics.
-- [ ] **6F:** publish a reproducible public Gold/BTC acceptance bundle, migrations and Windows CI;
-  record exact P5-01–P5-07 dispositions and separate unverified destination/empirical gates.
+- [x] **6A:** advancing-clock alert authorization, cutoff-aligned evidence token, persisted
+  freshness deadline and typed zero-call quarantine for incomplete legacy request policy.
+- [x] **6B:** provider/quote availability and provenance retention, compatible evidence-mode
+  validation, contiguous pre-entry/post-entry quote and OHLC coverage, versioned Phase 6 outcomes.
+- [x] **6C reviewed counterexamples:** cadence evaluation during silence, availability-time provider
+  decisions, source-state gates and a public connected paper command deriving later outcomes.
+- [x] **6D:** atomic paper-event/cursor commits, consumed-prefix identity, duplicate-first recovery,
+  replacement/truncation/conflict and interrupted-transaction regressions.
+- [x] **6E:** central holdout projection for ordinary API/detail/summary/export inputs and durable
+  explicit final opening with `HOLDOUT_PROTECTED`/`HOLDOUT_OPENED` operator state.
+- [x] **6F offline verification:** public synthetic Gold/BTC research and connected paper commands,
+  backend/frontend checks, evidence-mode displays and native Windows instructions.
+- [ ] **Remaining 6C/6F acceptance:** one shared production-worker/historical application service
+  for every admission/lifecycle/risk step, durable checkpoint/resume of complete derived workflow
+  state, longer bounded-memory soak, and destination Windows recovery evidence.
 
-The immediate next phase is correctness and acceptance, followed by controlled collection and
-prospective validation against declared criteria. No fixture, model agreement or completed
-development checklist authorizes execution or establishes an empirical edge.
+These remaining gates do not reopen the demonstrated P5 defects, but they prevent a claim of full
+live-style parity or operational readiness. Licensed market data, genuine contemporaneous provider
+outputs and elapsed forward observation remain unavailable.
 
-## Future phase — derivatives/optional execution (separate approval; deferred)
+## Phase 7 — derivatives/optional execution (separate approval; deferred)
 19. Read-only Delta options chain/Greeks/contract expiry/bid ask; verify option premium expectancy not merely underlying direction.
 20. Only after independent audit, create a separate execution system with separate keys and authorization, kill switch, position limits, approvals, idempotence, API order reconciliation and sandbox validations. Execution is not in this repo's current scope.
 
 ## Milestone acceptance criteria
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
-- M3: implemented with a passing fixture baseline; remaining dispatch/upgrade findings are assigned
-  to 6A. Live provider/model entitlement, paid-call behavior, Slack delivery,
+- M3: implemented with a passing fixture baseline; the reviewed dispatch/upgrade findings are
+  corrected in 6A while complete shared-policy parity remains open. Live provider/model entitlement,
+  paid-call behavior, Slack delivery,
   Windows installation and extended market soak remain separate operator acceptance gates.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
 - M5 software acceptance remains open until the six-engine workflow, outcome evaluator, partitions,

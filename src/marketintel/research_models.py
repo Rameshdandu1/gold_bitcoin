@@ -282,12 +282,15 @@ class ExecutableQuote(BaseModel):
     venue: str
     symbol: str
     observed_at_utc: datetime
+    available_at_utc: datetime | None = None
     bid: Decimal = Field(gt=0)
     ask: Decimal = Field(gt=0)
 
     @model_validator(mode="after")
     def valid_quote(self) -> ExecutableQuote:
         _aware(self.observed_at_utc, "observed_at_utc")
+        if self.available_at_utc is not None:
+            _aware(self.available_at_utc, "available_at_utc")
         if not self.bid.is_finite() or not self.ask.is_finite() or self.ask <= self.bid:
             raise ValueError("Executable quote must have finite positive bid below ask")
         return self
@@ -338,11 +341,25 @@ class ArmDecision(BaseModel):
     reason: str
     provider_latency_ms: int = Field(default=0, ge=0)
     attributable_cost_microusd: int = Field(default=0, ge=0)
+    evidence_mode: DataMode | None = None
+    provider: Literal["GPT", "CLAUDE", "DUAL"] | None = None
+    provider_completed_at_utc: datetime | None = None
+    provider_available_at_utc: datetime | None = None
+    request_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    configuration_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("ready_at_utc")
     @classmethod
     def ready_is_aware(cls, value: datetime) -> datetime:
         return _aware(value, "ready_at_utc")
+
+    @model_validator(mode="after")
+    def provider_times_are_aware(self) -> ArmDecision:
+        if self.provider_completed_at_utc is not None:
+            _aware(self.provider_completed_at_utc, "provider_completed_at_utc")
+        if self.provider_available_at_utc is not None:
+            _aware(self.provider_available_at_utc, "provider_available_at_utc")
+        return self
 
 
 class PriceBar(BaseModel):
@@ -409,6 +426,8 @@ class ResearchOutcome(BaseModel):
     supporting_event_ids: tuple[str, ...] = ()
     data_complete: bool
     hypothetical: Literal[True] = True
+    decision_evidence_mode: DataMode | None = None
+    market_data_mode: DataMode | None = None
 
 
 class ArmRecord(BaseModel):
@@ -426,6 +445,7 @@ class ArmRecord(BaseModel):
     decision_ready_at_utc: datetime | None = None
     provider_latency_ms: int = Field(default=0, ge=0)
     attributable_cost_microusd: int = Field(default=0, ge=0)
+    evidence_mode: DataMode | None = None
     reason: str
     outcome: ResearchOutcome | None = None
 
@@ -451,6 +471,7 @@ class OpportunityRecord(BaseModel):
     label_information_start_utc: datetime
     label_information_end_utc: datetime
     quantitatively_eligible: bool
+    market_data_mode: DataMode | None = None
     arms: tuple[ArmRecord, ...]
 
     @model_validator(mode="after")

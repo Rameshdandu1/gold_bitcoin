@@ -9,7 +9,8 @@ Date: 2026-11-21 (Asia/Kolkata development environment; evidence timestamps are 
 > completion claims below, especially full workflow parity, evidence availability/provenance,
 > path coverage, paper recovery, holdout detail protection, alert clocks and legacy-job preflight.
 > Follow [CODEX_PHASE_6.md](../../prompts/CODEX_PHASE_6.md) for the next acceptance work. No historical
-> test output below has been rewritten.
+> test output below has been rewritten. Implemented dispositions and remaining limits are recorded
+> separately in [phase-6-verification.md](phase-6-verification.md).
 
 ## Revisions and baseline
 

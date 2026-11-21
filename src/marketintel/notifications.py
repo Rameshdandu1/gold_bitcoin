@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -97,13 +98,21 @@ class AlertWorker:
         store: Store,
         settings: Settings,
         transport: AlertTransport | None = None,
+        *,
+        clock: Callable[[], datetime] | None = None,
     ):
         self.store = store
         self.settings = settings
         self.transport = transport or SlackWebAPITransport()
+        self.clock = clock or (lambda: datetime.now(UTC))
+        self._uses_external_clock = clock is not None
 
     async def run_once(self, *, owner: str, now: datetime | None = None) -> bool:
-        now = now or datetime.now(UTC)
+        claim_time = now or self.clock()
+
+        def current_time() -> datetime:
+            return self.clock() if self._uses_external_clock or now is None else claim_time
+
         if not self.settings.alerts_enabled:
             return False
         token = self.settings.slack_bot_token.get_secret_value()
@@ -111,7 +120,7 @@ class AlertWorker:
             return False
         item = self.store.claim_outbox_item(
             owner,
-            now=now,
+            now=claim_time,
             lease_seconds=self.settings.alert_lease_seconds,
         )
         if item is None:
@@ -121,16 +130,16 @@ class AlertWorker:
             self.store.finish_outbox_attempt(
                 item,
                 status="SUPPRESSED",
-                now=now,
+                now=current_time(),
                 error="immutable destination is not served by current configuration",
             )
             return True
-        eligible, reason = self.store.outbox_delivery_eligible(item, now=now)
+        eligible, reason = self.store.outbox_delivery_eligible(item, now=current_time())
         if not eligible:
             self.store.finish_outbox_attempt(
                 item,
                 status="SUPPRESSED",
-                now=now,
+                now=current_time(),
                 error=reason,
             )
             return True
@@ -146,14 +155,15 @@ class AlertWorker:
                 self.store.finish_outbox_attempt(
                     item,
                     status="SUPPRESSED",
-                    now=now,
+                    now=current_time(),
                     error="confirmation evidence is unavailable",
                 )
                 return True
             analysis = load_canonical_analysis(payload, decision["envelope_digest"])
             frozen_risk = decision["eligibility"]
             for _ in range(2):
-                current = current_eligibility(self.store, self.settings, analysis, now=now)
+                evaluated_at = current_time()
+                current = current_eligibility(self.store, self.settings, analysis, now=evaluated_at)
                 current = current.model_copy(
                     update={
                         "required_costs_known": frozen_risk["required_costs_known"],
@@ -178,14 +188,16 @@ class AlertWorker:
                     self.store.finish_outbox_attempt(
                         item,
                         status="SUPPRESSED",
-                        now=now,
+                        now=current_time(),
                         error="current confirmation gate failed: " + detail,
                     )
                     return True
                 if self.store.mark_outbox_dispatch_started(
                     item,
-                    now=now,
+                    now=evaluated_at,
                     evidence_token=current.eligibility_token,
+                    evidence_valid_until=current.evidence_valid_until_utc,
+                    clock=current_time,
                 ):
                     dispatch_started = True
                     break
@@ -193,11 +205,11 @@ class AlertWorker:
                 self.store.finish_outbox_attempt(
                     item,
                     status="SUPPRESSED",
-                    now=now,
+                    now=current_time(),
                     error="market evidence changed during dispatch authorization",
                 )
                 return True
-        elif self.store.mark_outbox_dispatch_started(item, now=now):
+        elif self.store.mark_outbox_dispatch_started(item, now=current_time(), clock=current_time):
             dispatch_started = True
         if not dispatch_started:
             return True
@@ -212,7 +224,7 @@ class AlertWorker:
             self.store.finish_outbox_attempt(
                 item,
                 status="RECEIPT_UNKNOWN",
-                now=now,
+                now=current_time(),
                 error=type(exc).__name__,
             )
         except SlackTransientError as exc:
@@ -221,29 +233,29 @@ class AlertWorker:
                 self.store.finish_outbox_attempt(
                     item,
                     status="FAILED",
-                    now=now,
+                    now=current_time(),
                     error=type(exc).__name__,
                 )
             else:
                 self.store.finish_outbox_attempt(
                     item,
                     status="RETRY",
-                    now=now,
-                    retry_at=now + timedelta(seconds=min(2**next_attempt, 300)),
+                    now=current_time(),
+                    retry_at=current_time() + timedelta(seconds=min(2**next_attempt, 300)),
                     error=type(exc).__name__,
                 )
         except Exception as exc:
             self.store.finish_outbox_attempt(
                 item,
                 status="FAILED",
-                now=now,
+                now=current_time(),
                 error=type(exc).__name__,
             )
         else:
             self.store.finish_outbox_attempt(
                 item,
                 status="SENT",
-                now=now,
+                now=current_time(),
                 receipt_id=receipt,
             )
         return True

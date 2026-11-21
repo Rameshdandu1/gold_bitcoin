@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
@@ -14,7 +15,10 @@ from marketintel.ai import (
 )
 from marketintel.analysis import build_analysis_envelope
 from marketintel.config import Settings
-from marketintel.orchestration import ReviewOrchestrator
+from marketintel.delta import OrderBookAssembler, parse_trade_message
+from marketintel.models import SignalState
+from marketintel.orchestration import ReviewOrchestrator, frozen_provider_config
+from marketintel.quantitative import lifecycle_event
 from marketintel.review import AnalystAssessmentV2, TokenUsage
 from marketintel.storage import Store
 
@@ -43,7 +47,7 @@ def valid_assessment(analysis, **changes):
 
 
 def analysis_fixture():
-    candidate, snapshot, instrument = phase3_fixture()
+    candidate, snapshot, instrument = phase3_fixture(observed_at=datetime.now(UTC))
     return build_analysis_envelope(candidate, snapshot, instrument)
 
 
@@ -321,18 +325,58 @@ def review_settings(**changes):
 
 
 def queued_review(store, analysis, settings):
+    candidate, _, _ = phase3_fixture(observed_at=analysis.envelope.observed_at_utc)
     now = datetime.now(UTC)
+    store.add_candidate_with_lifecycle(
+        candidate,
+        lifecycle_event(
+            candidate_id=candidate.candidate_id,
+            snapshot_id=candidate.snapshot_id,
+            from_state=None,
+            to_state=SignalState.CANDIDATE,
+            occurred_at=candidate.observed_at_utc,
+            reason="TEST_FIXTURE_NOT_LIVE",
+        ),
+    )
+    market_at = now
+    event_micros = int(market_at.timestamp() * 1_000_000)
+    event, _ = parse_trade_message(
+        {
+            "type": "trades",
+            "sy": candidate.symbol,
+            "p": "2600",
+            "s": "1",
+            "r": "t",
+            "t": event_micros,
+            "ts": event_micros + 1,
+        },
+        received_at=market_at,
+    )
+    store.append_raw_event(event)
+    for source, state in (
+        ("product_discovery:GOLD", "AVAILABLE"),
+        (f"candle_reconciliation:{candidate.symbol}", "VALID"),
+        ("delta_websocket", "CONNECTED"),
+    ):
+        store.record_source_status(source, state, "TEST_FIXTURE_NOT_LIVE", occurred_at=market_at)
+    book = OrderBookAssembler(candidate.symbol, max_age_seconds=120)
+    book.bids = {Decimal("2599.9"): ("2599.9", "10")}
+    book.asks = {Decimal("2600.1"): ("2600.1", "10")}
+    book.last_sequence = 1
+    book.last_event_time_utc = market_at
+    book.last_received_at_utc = market_at
+    book.valid = True
+    book.reason = "TEST_FIXTURE_NOT_LIVE"
+    store.save_book_checkpoint(book)
     run_id = store.create_review_run(
         analysis,
-        provider_config={
-            "openai_model": settings.openai_model,
-            "anthropic_model": settings.anthropic_model,
-        },
+        provider_config=frozen_provider_config(settings, analysis),
         now=now,
         deadline_at=now + timedelta(seconds=10),
     )
     claim = store.claim_review_job("fixture-worker", now=now, lease_seconds=30)
     assert claim is not None
+    claim["_fixture_now"] = now
     return run_id, claim
 
 
@@ -355,6 +399,7 @@ async def test_missing_price_configuration_makes_zero_provider_calls(tmp_path):
         settings,
         GPTAnalyst(settings, gpt_transport),
         ClaudeAnalyst(settings, claude_transport),
+        clock=lambda: claim["_fixture_now"],
     ).execute(analysis, run_id=run_id, claim=claim)
 
     assert [result.status for result in results] == ["NOT_READY", "NOT_READY"]
@@ -376,6 +421,7 @@ async def test_incomplete_dual_provider_configuration_makes_zero_paid_calls(tmp_
         settings,
         GPTAnalyst(settings, gpt_transport),
         ClaudeAnalyst(settings, claude_transport),
+        clock=lambda: claim["_fixture_now"],
     ).execute(analysis, run_id=run_id, claim=claim)
 
     assert [result.status for result in results] == ["NOT_READY", "NOT_READY"]
@@ -400,9 +446,12 @@ async def test_concurrent_providers_share_atomic_total_call_budget(tmp_path):
         settings,
         GPTAnalyst(settings, gpt_transport),
         ClaudeAnalyst(settings, claude_transport),
+        clock=lambda: claim["_fixture_now"],
     ).execute(analysis, run_id=run_id, claim=claim)
 
-    assert sum(result.status == "SUCCEEDED" for result in results) == 1
+    assert sum(result.status == "SUCCEEDED" for result in results) == 1, [
+        (result.status, result.failure_code) for result in results
+    ]
     assert sum(result.status == "NOT_READY" for result in results) == 1
     assert gpt_transport.calls + claude_transport.calls == 1
 
@@ -423,6 +472,7 @@ async def test_transient_timeout_retries_once_and_persists_each_attempt(tmp_path
         settings,
         GPTAnalyst(settings, gpt_transport),
         ClaudeAnalyst(settings, claude_transport),
+        clock=lambda: claim["_fixture_now"],
     ).execute(analysis, run_id=run_id, claim=claim)
 
     assert gpt.status == claude.status == "SUCCEEDED"

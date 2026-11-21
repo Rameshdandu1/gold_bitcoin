@@ -21,10 +21,10 @@ authentication only over a trusted loopback connection, VPN, or an HTTPS reverse
 | `GET /api/queue` | review-job and alert-outbox counts plus stale lease counts |
 | `GET /api/research/summary` | isolated experiment/paper counts and explicit evidence classification; no external call |
 | `GET /api/research/experiments?limit=50&offset=0` | bounded experiment identities, canonical hashes, data mode and source coverage |
-| `GET /api/research/experiments/{id}` | authoritative stored manifest/configuration, counts, engine matrix, reports and scoped action counters |
+| `GET /api/research/experiments/{id}` | partition-projected counts, `NO_HOLDOUT`/`HOLDOUT_PROTECTED`/`HOLDOUT_OPENED`, authoritative manifest/configuration, engine matrix and reports |
 | `GET /api/research/experiments/{id}/engines` | six-engine evaluation/candidate counts for the selected experiment |
-| `GET /api/research/experiments/{id}/opportunities?limit=50&offset=0` | bounded selected revision, four-arm decision and outcome records |
-| `GET /api/research/paper/transitions?limit=100&offset=0` | append-only prospective paper decision/outcome transitions without raw provider payloads |
+| `GET /api/research/experiments/{id}/opportunities?limit=50&offset=0` | bounded four-arm records; protected/crossing outcomes are withheld until recorded final access |
+| `GET /api/research/paper/transitions?limit=100&offset=0` | append-only paper transitions with explicit evidence modes in the summary; no raw provider payloads |
 | `GET /docs`, `/openapi.json` | authenticated FastAPI schema and documentation |
 
 Candidate responses keep `current_lifecycle_*` separate from historical consensus. Provider cards
@@ -43,7 +43,10 @@ and Slack delivery are disabled by default. Configuring credentials does not aut
 paid calls or send messages. Current model/account entitlement and actual Slack delivery require a
 separate bounded operator-approved smoke test.
 
-The research summary uses the same operator authentication as every non-liveness route. Action
+The research summary uses the same operator authentication as every non-liveness route. Ordinary
+detail, opportunity, count and report inputs share the frozen holdout projection. The deliberate
+`final-holdout` CLI action records the experiment/config identity before protected results become
+readable, and later reads display `HOLDOUT_OPENED`. Action
 counters carry an explicit experiment scope; an unmeasured counter is `null`, never a fabricated
 zero. Dataset mode, hashes and counts come from the selected immutable experiment. Licensed raw
 records and raw provider payloads are not returned.

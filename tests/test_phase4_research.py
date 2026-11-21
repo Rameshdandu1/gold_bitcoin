@@ -254,18 +254,29 @@ def test_expiry_boundary_is_inclusive_and_does_not_reset_for_ai_arm() -> None:
 
 
 def test_ohlc_same_bar_target_and_stop_is_ambiguous() -> None:
+    pre_entry = PriceBar(
+        event_id="bar-pre-entry",
+        venue="delta_india",
+        symbol="BTCUSD",
+        start_utc=NOW,
+        end_utc=NOW + timedelta(seconds=10),
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+    )
     bar = PriceBar(
         event_id="bar-1",
         venue="delta_india",
         symbol="BTCUSD",
-        start_utc=NOW + timedelta(seconds=11),
+        start_utc=NOW + timedelta(seconds=10),
         end_utc=NOW + timedelta(minutes=1),
         open=Decimal("100"),
         high=Decimal("106"),
         low=Decimal("94"),
         close=Decimal("101"),
     )
-    outcome = evaluate_bar_path(candidate(), decision(), [bar])
+    outcome = evaluate_bar_path(candidate(), decision(), [pre_entry, bar])
     assert outcome.code == "AMBIGUOUS"
 
 
