@@ -1,23 +1,29 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: Design v0.6 / evidence-integrity MVP. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: v0.6 implementation / Phase 6 closeout required. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
 ## Phase 6 evidence architecture
 
+The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) qualifies the current
+implementation below. Complete [CODEX_PHASE_6_CLOSEOUT.md](prompts/CODEX_PHASE_6_CLOSEOUT.md) before
+claiming software acceptance or beginning routine live operation.
+
 The alert worker refreshes its clock at each risk attempt and again inside the short dispatch
 authorization transaction. The eligibility token and evaluated trade set use the same receive-time
-cutoff; the authorization records its actual time and evidence freshness deadline. Legacy review
-jobs without the complete frozen request policy are quarantined with a typed zero-call disposition.
+cutoff; the authorization records its actual time and a freshness deadline. The deadline still
+requires correction to use the same book event-time predicate as the actual quality check. Legacy
+jobs without complete frozen request policy are quarantined with a typed zero-call disposition.
 Migration `0006_phase6_evidence_integrity` is additive.
 
-Research preserves provider completion and factual availability separately. Arm readiness uses
-availability, executable quote fills use the later of event and availability time, and arm/outcome
-records retain data/evidence modes and request/configuration identities. Synthetic provider rows
-cannot be relabelled as prospective by changing only a manifest assertion. Quote evaluation proves
-a start anchor and every pre/post-entry gap; OHLC evaluation requires contiguous intervals.
+Research stores provider completion and availability separately. The default projection uses
+envelope availability, but an explicitly supplied older payload clock currently overrides it; that
+conflict must be rejected or conservatively normalized. Modes and request/configuration digests
+are retained, while actual archived model identity remains an open contract. Synthetic/prospective
+mode conflicts are rejected. Quote anchors and isolated OHLC gaps are checked, but the final
+pre-entry quote interval and incomplete pre-entry bars still require correction.
 
 The scheduler evaluates every frozen cadence even during input silence. Source transitions are
 applied at their availability time to provider readiness and outcome eligibility. This closes the
@@ -27,9 +33,11 @@ durable full-workflow checkpoint/resume remain separate open acceptance gates.
 The connected `paper-workflow` command consumes the stored normalized journal and frozen decisions,
 writes decisions before their latency-adjusted eligible entry, and derives outcomes from later
 quotes/source events. Fixture runs are labelled `SIMULATED_PROSPECTIVE`, never prospective elapsed
-observation. The local-stream worker commits each event and cursor atomically and binds progress to
-source identity, generation and a consumed-prefix SHA-256. Ordinary research reads centrally hide
-holdout/crossing outcomes until `final-holdout` records the frozen access identity.
+observation. Missing/expired model arms currently fail the entry chronology rule, and a warmup-only
+bounded run can report complete from zero decisions/outcomes; both need explicit terminal/progress
+semantics. The local-stream worker commits each event and cursor atomically and binds progress to
+source identity, generation and a consumed-prefix SHA-256. Ordinary research reads hide unopened
+holdout/crossing outcomes, but the paper derivation/read path still bypasses that policy.
 
 ## Phase 5 evidence foundation
 
@@ -42,10 +50,11 @@ order transport.
 
 Candidates, four-arm decisions and their target/configuration identities are immutable records.
 Phase 6 persists archived-provider decisions when their evidence becomes available, preserves
-their clocks/provenance and revalidates source state before entry. Quote and OHLC evaluation now
-require complete pre-entry and outcome paths. Ordinary aggregate, detail, API and export reads use
-one holdout projection, with deliberate final access recorded before protected results become
-visible. Complete reuse of production admission/lifecycle policy remains an explicit open gate.
+availability fields/provenance and revalidates source state before entry. The review documents
+conflicting-clock and incomplete-path exceptions to the intended contract. Ordinary research
+aggregate/detail/API/export reads use a holdout projection; paper-derived records need equivalent
+partition provenance and protection. Complete production admission/lifecycle/risk reuse, durable
+derived-state checkpoints and bounded total processing remain explicit closeout gates.
 
 Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
 hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,
@@ -77,13 +86,11 @@ units are versioned, and required funding fails closed. Outcomes preserve `NO_EN
 time exit, `AMBIGUOUS` and `INCOMPLETE`. Folds keep all opportunity revisions/arms together and
 purge overlapping label-information intervals with a time embargo.
 
-**Independent review:** [phase-5-verification.md](docs/audits/phase-5-verification.md) records the
-implementation team's executed checks. The later
-[Phase 5 independent review](docs/audits/phase-5-independent-review.md) verifies substantial fixes
-and qualifies their remaining acceptance boundaries. Architectural requirements remain distinct
-from empirical acceptance: live providers, licensed data, prospective duration and destination
-deployment are not proven by fixtures. Passing fixtures are not evidence of live provider readiness
-or strategy performance.
+**Independent review:** historical verification reports retain their original executed checks.
+The [Phase 6 independent review](docs/audits/phase-6-independent-review.md) records current verified
+fixes and remaining acceptance boundaries. Architectural requirements remain distinct from empirical
+acceptance: live providers, licensed data, prospective duration and destination deployment are not
+proven by fixtures. Passing fixtures are not evidence of live provider readiness or strategy performance.
 
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.

@@ -1,12 +1,24 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
+## Current task: Phase 6 closeout
+
+The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) of merged PR #10 at
+`f66ac11f4d958a0075d7e22a5d841256e19b55df` passed the 237-test baseline and positive public Gold/BTC
+workflows. It reproduced five remaining finding groups and confirmed three unfinished software
+acceptance gates. Follow [CODEX_PHASE_6_CLOSEOUT.md](prompts/CODEX_PHASE_6_CLOSEOUT.md).
+
+The remaining sequence is Phase 6 software closeout, controlled Windows/live integration validation,
+then prospective paper observation. Derivatives/execution remain deferred. The next task completes
+existing requirements; it does not expand the feature scope.
+
 ## Phase 6 evidence-integrity workflow
 
-Phase 6 preserves factual event/completion/availability clocks and evidence modes from normalized
-input through the six-engine detector, frozen four-arm decisions, quote-side outcomes, protected
-partitions, exports and a connected paper ledger. Research and paper state remain isolated from
-production review, budget and notification state. The included generator creates explicitly
-synthetic Gold/BTC verification streams; it does not establish strategy accuracy or profitability.
+Phase 6 adds availability/provenance fields, cadence evaluation, quote-side outcomes, protected
+ordinary research reads and a connected synthetic paper command. The review identified remaining
+clock-conflict, coverage, paper-holdout and terminal/progress failures; complete shared policy,
+derived-state resume and bounded whole-workflow memory also remain open. Research and paper state
+remain isolated from production review, budget and notification state. The included generator
+creates synthetic verification streams; it does not establish strategy accuracy or profitability.
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures
@@ -21,9 +33,10 @@ Repeat `run-workflow`, `paper-workflow`, `evaluate` and `report` with the genera
 `phase5-btc-workflow-v1`. Acceptance tests run all six real detectors; fixture provider completions
 remain labelled `SYNTHETIC_FIXTURE`. `paper-workflow` is explicitly
 `SIMULATED_PROSPECTIVE`: it durably records decisions before eligible fixture entry and derives
-outcomes from later normalized quotes. It is not elapsed real-time prospective evidence. Missing
-genuine assessments stay `UNAVAILABLE`. The external local-stream importer is separately bounded
-and disabled:
+outcomes from later normalized quotes. It is not elapsed real-time prospective evidence. The
+current paper command still needs the reviewed missing/expired-assessment and bounded-progress
+corrections; a positive complete fixture does not establish those paths. The external local-stream
+importer is separately bounded per cycle and disabled:
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
@@ -36,15 +49,15 @@ and disabled:
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-22):** Phase 6 closes the demonstrated P5-01, P5-02, P5-04, P5-05,
-P5-06 and P5-07 defects and the concrete P5-03 source/scheduling counterexamples with worker,
-store and public-command regressions. Full production-worker/shared-service parity and durable
-full-workflow checkpoint/resume remain explicit acceptance limitations. See the
-[independent Phase 5 review](docs/audits/phase-5-independent-review.md) and
-[Phase 6 verification](docs/audits/phase-6-verification.md). Live provider/model
-entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
-prospective observation duration, destination Windows Server recovery, market-data soak and
-empirical strategy performance remain unverified.
+**Review status (2026-11-22):** legacy zero-call quarantine, original alert-clock cases, ordinary
+holdout projections, mixed-mode rejection and local paper transaction controls have verified
+corrections. The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) documents
+remaining authorization freshness, conflicting availability, anchored coverage, paper-derived
+holdout exposure and paper terminal/progress issues. The
+[implementation verification](docs/audits/phase-6-verification.md) remains historical evidence of
+the checks it ran. Live provider/model entitlement, licensed data, genuine contemporary AI evidence,
+Slack delivery, forward observation, destination recovery, market-data soak and strategy performance
+are separate unverified gates.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,
