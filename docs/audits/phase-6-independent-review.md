@@ -2,6 +2,12 @@
 
 Review date: 2026-11-22 (Asia/Kolkata). Application timestamps in this report are UTC. All prices, P&L and elapsed-time examples are hypothetical verification fixtures.
 
+> **Later review:** The [independent closeout review](phase-6-closeout-independent-review.md) of
+> merged PR #12/#13 confirms the five exact P6-01 through P6-05 corrections. It retains three
+> reproducible issues within shared application parity and whole-workflow memory acceptance.
+> This report preserves the original `f66ac11` findings and executed results; the current task is
+> [CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md](../../prompts/CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md).
+
 ## Verdict
 
 **Phase 6 improves the application and passes its automated baseline, but remains incomplete against its existing acceptance criteria.** Five finding groups require correction, and the implementation report already acknowledges three unfinished software gates. The next coding task is **Phase 6 closeout**, followed by controlled Windows/live integration validation and prospective paper observation. This is not authorization to start derivatives or execution.

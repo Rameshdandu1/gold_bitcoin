@@ -1,6 +1,6 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: v0.6 implementation / Phase 6 offline closeout complete; external validation pending. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: v0.6 implementation / Phase 6 workflow acceptance corrections pending; external validation follows. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
@@ -9,8 +9,11 @@ optional, not required for this starter.
 
 The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) defined the closeout
 findings and acceptance gaps. Their offline disposition is recorded in the
-[Phase 6 closeout verification](docs/audits/phase-6-closeout-verification.md). Routine live operation
-still requires the separately documented external validation gates.
+[Phase 6 closeout verification](docs/audits/phase-6-closeout-verification.md). The later
+[independent closeout review](docs/audits/phase-6-closeout-independent-review.md) verifies all five
+exact corrections and tested resume paths, but leaves P6C-01/02 contemporaneous application parity
+and P6C-03 whole-workflow memory open. Routine live operation requires those software corrections
+and the separately documented external validation gates.
 
 The alert worker refreshes its clock at each risk attempt and again inside the short dispatch
 authorization transaction. The eligibility token and evaluated trade set use the same receive-time
@@ -28,17 +31,26 @@ expiry, including complete pre-entry intervals.
 
 The scheduler evaluates every frozen cadence even during input silence. Source transitions are
 applied at their availability time to provider readiness and outcome eligibility. Production
-consensus and connected research adapt their point-in-time evidence into one clock-injected
-application policy for revision, lifecycle, expiry, source, stop, spread and entry-drift checks.
+consensus and connected research reuse clock-injected predicates for revision, lifecycle, expiry,
+source, stop, spread and entry-drift checks. Full application parity is not yet established:
+research supplies constant revision/lifecycle/order facts, omits executed-trade terminal history,
+and can recompute an earlier arm using a later book. The shared service must preserve contemporaneous
+decisions and equivalent factual inputs before that acceptance gate closes.
 
 The connected `paper-workflow` command consumes the stored normalized journal in indexed 500-event
-batches, writes approved decisions before latency-adjusted eligible entry, and separately persists
+input batches, writes approved decisions before latency-adjusted eligible entry, and separately persists
 terminal unavailable/no-position decisions at their factual resolution. Run identity binds the
 experiment, configuration, dataset and processing/latency policy. Fixture runs are labelled
 `SIMULATED_PROSPECTIVE`, never prospective elapsed observation. Paper rows retain partition
 provenance; ordinary API, count and export paths hide protected/crossing outcomes until
 `final-holdout` records the frozen access identity. Legacy rows lacking provenance are hidden from
 scoped projections.
+
+Input pages do not bound the whole workflow: the current quote projection materializes full symbol
+history before filtering, and candidate/output collections still retain historical records. The
+independent two-length resource measurement leaves this gate open. The corrective task must page
+evidence/output, retain necessary coverage anchors and retire resolved active state without silently
+discarding facts.
 
 The local-stream worker commits each event and cursor atomically and binds progress to source
 identity, generation and a consumed-prefix SHA-256.
