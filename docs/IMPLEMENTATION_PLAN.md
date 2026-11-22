@@ -166,29 +166,32 @@ acceptance is qualified by the [Phase 6 review](audits/phase-6-independent-revie
   decisions, source-state gates and a public connected paper command deriving later outcomes.
 - [x] **6D:** atomic paper-event/cursor commits, consumed-prefix identity, duplicate-first recovery,
   replacement/truncation/conflict and interrupted-transaction regressions.
-- [x] **6E ordinary research reads:** holdout projection and durable explicit final opening.
-  The paper-derived read path still exposes protected results (P6-04).
+- [x] **6E:** holdout projection and durable explicit final opening across ordinary and
+  paper-derived API/detail/summary/export paths.
 - [x] **6F offline verification:** public synthetic Gold/BTC research and connected paper commands,
   backend/frontend checks, evidence-mode displays and native Windows instructions.
-- [ ] **Remaining 6C/6F acceptance:** one shared production-worker/historical application service
-  for every admission/lifecycle/risk step, durable checkpoint/resume of complete derived workflow
-  state, and measured bounded whole-workflow memory. Destination Windows recovery is a separate
-  operational gate below.
+- [x] **Phase 6 offline closeout:** shared revision/lifecycle/source/current-risk application policy,
+  durable complete derived-workflow and connected-paper resume, scoped holdout-safe paper provenance,
+  explicit unavailable/expired terminal arms and measured 500-event public-command batching.
+
+The offline software gates are closed by the Phase 6 closeout regression/public-command bundle.
+Destination Windows recovery, licensed live data, genuine contemporaneous provider outputs and
+elapsed forward observation remain operational or empirical gates, not unfinished software slices.
 
 ### Phase 6 closeout — fixed remaining software scope
 
-- [ ] **Closeout A:** P6-01 shared freshness deadline, P6-02 authoritative availability clocks,
+- [x] **Closeout A:** P6-01 shared freshness deadline, P6-02 authoritative availability clocks,
   P6-03 anchored quote-gap and incomplete pre-entry OHLC coverage corrections.
-- [ ] **Closeout B:** P6-04 holdout protection through paper derivation/reads and P6-05 legal
+- [x] **Closeout B:** P6-04 holdout protection through paper derivation/reads and P6-05 legal
   missing/expired-provider dispositions plus truthful bounded-progress/completion states.
-- [ ] **Closeout C:** finish the three shared-policy, derived-state resume and whole-memory gates
+- [x] **Closeout C:** finish the three shared-policy, derived-state resume and whole-memory gates
   using actual public/live-style entry points and fresh-process interruption evidence.
-- [ ] **Closeout D:** publish exact red/green finding evidence, preserved controls, migrations,
+- [x] **Closeout D:** publish exact red/green finding evidence, preserved controls, migrations,
   public Gold/BTC verification, checksums and Windows CI in a closeout verification report.
 
-This closes existing requirements; it does not add a feature-development phase. The reviewed main
-`f66ac11f4d958a0075d7e22a5d841256e19b55df` passes 237 tests and the positive workflows, while the
-five reproduced finding groups and these three gates keep software acceptance open.
+This closes the existing offline requirements; it does not add a feature-development phase. The
+reviewed main `f66ac11f4d958a0075d7e22a5d841256e19b55df` remains the 237-test review baseline, and
+the closeout verification records the later 251-test corrective result.
 
 ## Next operational stage — controlled Windows and live integration validation
 

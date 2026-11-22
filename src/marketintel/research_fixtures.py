@@ -50,13 +50,15 @@ def _instrument(asset: str) -> Instrument:
     )
 
 
-def _book(now: datetime) -> BookFeatures:
+def _book(now: datetime, asset: str) -> BookFeatures:
+    bid = Decimal("2599.9" if asset == "GOLD" else "69999")
+    ask = Decimal("2600.1" if asset == "GOLD" else "70001")
     return BookFeatures(
         available=True,
         observed_at_utc=now,
-        best_bid=Decimal("100"),
-        best_ask=Decimal("100.1"),
-        spread=Decimal("0.1"),
+        best_bid=bid,
+        best_ask=ask,
+        spread=ask - bid,
         bid_depth_quote=Decimal("1400"),
         ask_depth_quote=Decimal("600"),
         imbalance=Decimal("0.40"),
@@ -170,7 +172,7 @@ def generate_fixture(asset: str, output: Path) -> tuple[Path, Path]:
     symbol = "XAUTUSD" if asset == "GOLD" else "BTCUSD"
     instrument = _instrument(asset)
     trades = _trades(symbol, FIXTURE_NOW)
-    book = _book(FIXTURE_NOW)
+    book = _book(FIXTURE_NOW, asset)
     configs = [row for row in QUANT_ENGINE_CONFIGS if row.asset == asset]
     bars_by_engine = {row.engine: _bars(row, FIXTURE_NOW) for row in configs}
     candidates = {}
@@ -197,6 +199,8 @@ def generate_fixture(asset: str, output: Path) -> tuple[Path, Path]:
         evaluation_start_utc=FIXTURE_NOW,
         evaluation_end_utc=FIXTURE_NOW + timedelta(minutes=240),
         evaluation_cadence_seconds=60,
+        maximum_entry_drift_bps=Decimal("1000"),
+        maximum_spread_bps=Decimal("1000"),
         code_commit="PHASE5_WORKTREE",
         cost_policy=CostPolicy(
             policy_id="phase5-synthetic-cost-v1",
@@ -280,6 +284,8 @@ def generate_fixture(asset: str, output: Path) -> tuple[Path, Path]:
                 provider_latency_ms=seconds * 100,
                 attributable_cost_microusd=0,
                 evidence_mode="SYNTHETIC_FIXTURE",
+                requested_model_id=f"synthetic-{provider.lower()}-fixture-v1",
+                returned_model_id=f"synthetic-{provider.lower()}-fixture-v1",
             )
             observations.append(
                 ReplayObservation(

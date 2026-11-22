@@ -180,13 +180,15 @@ class ExperimentConfig(BaseModel):
     )
     target_index: int = Field(default=1, ge=1)
     entry_latency_ms: int = Field(default=0, ge=0)
+    maximum_entry_drift_bps: Decimal = Field(default=Decimal("10"), ge=0)
+    maximum_spread_bps: Decimal = Field(default=Decimal("10"), ge=0)
     cost_policy: CostPolicy
     seed: int = 0
     trial_number: int = Field(default=1, ge=1)
     holdout_start_utc: datetime | None = None
     embargo_seconds: int = Field(default=0, ge=0)
     code_commit: str = "UNRECORDED"
-    algorithm_version: str = "phase5-shared-engine-v1"
+    algorithm_version: str = "phase6-closeout-shared-v2"
     engine_policy_version: str = "m3a-v2"
     feature_policy_version: str = "phase5-feature-state-v1"
     revision_selection_policy: Literal["LATEST_ELIGIBLE_BEFORE_OUTCOME"] = (
@@ -347,6 +349,8 @@ class ArmDecision(BaseModel):
     provider_available_at_utc: datetime | None = None
     request_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     configuration_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    requested_model_id: str | None = Field(default=None, min_length=1)
+    returned_model_id: str | None = Field(default=None, min_length=1)
 
     @field_validator("ready_at_utc")
     @classmethod

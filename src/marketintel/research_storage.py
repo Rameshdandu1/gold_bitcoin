@@ -152,6 +152,19 @@ class ResearchStore:
                     measured_at_utc TEXT NOT NULL,
                     FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
                 );
+                CREATE TABLE IF NOT EXISTS derived_workflow_checkpoints (
+                    experiment_id TEXT PRIMARY KEY,
+                    manifest_hash TEXT NOT NULL,
+                    config_hash TEXT NOT NULL,
+                    input_offset INTEGER NOT NULL,
+                    next_evaluation_utc TEXT NOT NULL,
+                    state_json TEXT NOT NULL,
+                    generated_candidates INTEGER NOT NULL,
+                    engine_evaluations INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
+                );
                 """
             )
 
@@ -190,6 +203,74 @@ class ResearchStore:
             DatasetManifest.model_validate_json(row["manifest_json"]),
             ExperimentConfig.model_validate_json(row["config_json"]),
         )
+
+    def workflow_checkpoint(self, experiment_id: str) -> dict | None:
+        with _connect(self.path) as db:
+            row = db.execute(
+                "SELECT * FROM derived_workflow_checkpoints WHERE experiment_id=?",
+                (experiment_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["state"] = json.loads(result.pop("state_json"))
+        return result
+
+    def save_workflow_checkpoint(
+        self,
+        experiment_id: str,
+        *,
+        manifest_hash: str,
+        config_hash: str,
+        input_offset: int,
+        next_evaluation_utc: datetime,
+        state: dict,
+        generated_candidates: int,
+        engine_evaluations: int,
+        status: str,
+        updated_at_utc: datetime,
+    ) -> None:
+        if input_offset < 0 or generated_candidates < 0 or engine_evaluations < 0:
+            raise ValueError("Derived workflow checkpoint counters cannot be negative")
+        payload = json.dumps(state, sort_keys=True, separators=(",", ":"), default=str)
+        with _connect(self.path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT manifest_hash, config_hash, input_offset FROM "
+                "derived_workflow_checkpoints WHERE experiment_id=?",
+                (experiment_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["manifest_hash"] != manifest_hash
+                    or existing["config_hash"] != config_hash
+                ):
+                    raise ValueError("Derived workflow checkpoint identity changed")
+                if input_offset < int(existing["input_offset"]):
+                    raise ValueError("Derived workflow checkpoint moved backward")
+            db.execute(
+                "INSERT INTO derived_workflow_checkpoints VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(experiment_id) DO UPDATE SET "
+                "input_offset=excluded.input_offset, "
+                "next_evaluation_utc=excluded.next_evaluation_utc, "
+                "state_json=excluded.state_json, "
+                "generated_candidates=excluded.generated_candidates, "
+                "engine_evaluations=excluded.engine_evaluations, "
+                "status=excluded.status, updated_at_utc=excluded.updated_at_utc",
+                (
+                    experiment_id,
+                    manifest_hash,
+                    config_hash,
+                    input_offset,
+                    next_evaluation_utc.isoformat(),
+                    payload,
+                    generated_candidates,
+                    engine_evaluations,
+                    status,
+                    updated_at_utc.isoformat(),
+                ),
+            )
 
     def record_holdout_access(
         self,
@@ -385,6 +466,44 @@ class ResearchStore:
             ).fetchall()
         return [ReplayObservation.model_validate_json(row["observation_json"]) for row in rows]
 
+    def observation_count(self, experiment_id: str) -> int:
+        with _connect(self.path) as db:
+            row = db.execute(
+                "SELECT COUNT(*) AS count FROM research_observations WHERE experiment_id=?",
+                (experiment_id,),
+            ).fetchone()
+        return int(row["count"])
+
+    def observation_page(
+        self,
+        experiment_id: str,
+        *,
+        offset: int,
+        limit: int,
+        kind: str | None = None,
+        through_utc: datetime | None = None,
+    ) -> list[ReplayObservation]:
+        if offset < 0 or limit < 1:
+            raise ValueError("Observation page offset/limit is invalid")
+        clauses = ["experiment_id=?"]
+        values: list[object] = [experiment_id]
+        if kind is not None:
+            clauses.append("kind=?")
+            values.append(kind)
+        if through_utc is not None:
+            clauses.append("available_at_utc<=?")
+            values.append(through_utc.isoformat())
+        values.extend((limit, offset))
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "SELECT observation_json FROM research_observations WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY available_at_utc, persistence_sequence, observation_id "
+                + "LIMIT ? OFFSET ?",
+                values,
+            ).fetchall()
+        return [ReplayObservation.model_validate_json(row["observation_json"]) for row in rows]
+
     def save_engine_evaluation(
         self, experiment_id: str, *, engine: str, evaluated_at: datetime, result: dict
     ) -> None:
@@ -502,7 +621,7 @@ class ResearchStore:
         revision_id: str,
         outcome: ResearchOutcome,
         *,
-        evaluation_version: str = "phase6-outcome-v1",
+        evaluation_version: str = "phase6-closeout-outcome-v2",
         persisted_at: datetime | None = None,
     ) -> bool:
         payload = outcome.model_dump_json()
@@ -574,7 +693,10 @@ class ResearchStore:
             payload.setdefault("symbol", row.symbol)
             payload.setdefault("observed_at_utc", row.exchange_time_utc)
             payload.setdefault("available_at_utc", row.available_at_utc)
-            result.append(ExecutableQuote.model_validate(payload))
+            quote = ExecutableQuote.model_validate(payload)
+            if quote.available_at_utc != row.available_at_utc:
+                raise ValueError("Quote payload availability conflicts with its envelope")
+            result.append(quote)
         return result
 
     def save_points(self, experiment_id: str, points: list[ReplayPoint]) -> None:
@@ -752,6 +874,12 @@ class PaperLedger:
                     evidence_mode TEXT NOT NULL,
                     source_identity TEXT NOT NULL,
                     eligible_entry_after_utc TEXT NOT NULL,
+                    experiment_id TEXT,
+                    dataset_id TEXT,
+                    dataset_hash TEXT,
+                    partition_name TEXT,
+                    run_id TEXT,
+                    processing_policy_hash TEXT,
                     PRIMARY KEY (opportunity_id, revision_id, arm)
                 );
                 CREATE TABLE IF NOT EXISTS paper_cursor_bindings (
@@ -773,6 +901,19 @@ class PaperLedger:
                     occurred_at_utc TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS paper_workflow_runs (
+                    run_id TEXT PRIMARY KEY,
+                    experiment_id TEXT NOT NULL,
+                    config_hash TEXT NOT NULL,
+                    dataset_id TEXT NOT NULL,
+                    dataset_hash TEXT NOT NULL,
+                    processing_policy_hash TEXT NOT NULL,
+                    total_events INTEGER NOT NULL,
+                    consumed_events INTEGER NOT NULL,
+                    last_horizon_utc TEXT,
+                    status TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL
+                );
                 """
             )
             cursor_columns = {
@@ -783,6 +924,19 @@ class PaperLedger:
                     "ALTER TABLE paper_cursor_bindings ADD COLUMN prefix_digest TEXT NOT NULL "
                     "DEFAULT '0000000000000000000000000000000000000000000000000000000000000000'"
                 )
+            evidence_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(paper_decision_evidence)")
+            }
+            for name in (
+                "experiment_id",
+                "dataset_id",
+                "dataset_hash",
+                "partition_name",
+                "run_id",
+                "processing_policy_hash",
+            ):
+                if name not in evidence_columns:
+                    db.execute(f"ALTER TABLE paper_decision_evidence ADD COLUMN {name} TEXT")
 
     @staticmethod
     def _record_decision_in_transaction(
@@ -798,6 +952,12 @@ class PaperLedger:
         evidence_mode: str,
         entry_latency_ms: int,
         recorded_at: datetime,
+        experiment_id: str | None = None,
+        dataset_id: str | None = None,
+        dataset_hash: str | None = None,
+        partition: str | None = None,
+        run_id: str | None = None,
+        processing_policy_hash: str | None = None,
     ) -> bool:
         if candidate.opportunity_id != opportunity_id or candidate.revision_id != revision_id:
             raise ValueError("Paper candidate identity does not match decision key")
@@ -818,6 +978,12 @@ class PaperLedger:
             evidence_mode,
             source_identity,
             eligible_entry_after.isoformat(),
+            experiment_id,
+            dataset_id,
+            dataset_hash,
+            partition,
+            run_id,
+            processing_policy_hash,
         )
         existing = db.execute(
             "SELECT decision_json FROM paper_decisions WHERE opportunity_id=? "
@@ -829,7 +995,9 @@ class PaperLedger:
                 raise ValueError("Prospective decision is immutable")
             existing_evidence = db.execute(
                 "SELECT candidate_json, config_hash, target_index, evidence_mode, "
-                "source_identity, eligible_entry_after_utc FROM paper_decision_evidence "
+                "source_identity, eligible_entry_after_utc, experiment_id, dataset_id, "
+                "dataset_hash, partition_name, run_id, processing_policy_hash "
+                "FROM paper_decision_evidence "
                 "WHERE opportunity_id=? AND revision_id=? AND arm=?",
                 (opportunity_id, revision_id, decision.arm),
             ).fetchone()
@@ -838,8 +1006,14 @@ class PaperLedger:
             return False
         if decision.ready_at_utc > recorded_at:
             raise ValueError("Cannot prospectively record a future decision")
-        if evidence_mode in {"PROSPECTIVE", "SIMULATED_PROSPECTIVE"} and (
-            recorded_at > eligible_entry_after or recorded_at >= candidate.expires_at_utc
+        if (
+            decision.state == "APPROVED"
+            and evidence_mode
+            in {
+                "PROSPECTIVE",
+                "SIMULATED_PROSPECTIVE",
+            }
+            and (recorded_at > eligible_entry_after or recorded_at >= candidate.expires_at_utc)
         ):
             raise ValueError("Prospective decision must be persisted before eligible entry")
         db.execute(
@@ -847,7 +1021,11 @@ class PaperLedger:
             (opportunity_id, revision_id, decision.arm, payload, recorded_at.isoformat()),
         )
         db.execute(
-            "INSERT INTO paper_decision_evidence VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO paper_decision_evidence "
+            "(opportunity_id, revision_id, arm, candidate_json, config_hash, target_index, "
+            "evidence_mode, source_identity, eligible_entry_after_utc, experiment_id, "
+            "dataset_id, dataset_hash, partition_name, run_id, processing_policy_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (opportunity_id, revision_id, decision.arm, *evidence),
         )
         event_id = hashlib.sha256(
@@ -880,6 +1058,12 @@ class PaperLedger:
         evidence_mode: str = "PROSPECTIVE",
         entry_latency_ms: int = 0,
         recorded_at: datetime | None = None,
+        experiment_id: str | None = None,
+        dataset_id: str | None = None,
+        dataset_hash: str | None = None,
+        partition: str | None = None,
+        run_id: str | None = None,
+        processing_policy_hash: str | None = None,
     ) -> bool:
         with _connect(self.path) as db:
             db.execute("BEGIN IMMEDIATE")
@@ -895,6 +1079,12 @@ class PaperLedger:
                 evidence_mode=evidence_mode,
                 entry_latency_ms=entry_latency_ms,
                 recorded_at=recorded_at or datetime.now(UTC),
+                experiment_id=experiment_id,
+                dataset_id=dataset_id,
+                dataset_hash=dataset_hash,
+                partition=partition,
+                run_id=run_id,
+                processing_policy_hash=processing_policy_hash,
             )
 
     @classmethod
@@ -1162,18 +1352,137 @@ class PaperLedger:
                 (source, start.isoformat(), end.isoformat(), reason),
             )
 
-    def summary(self) -> dict:
+    def initialize_workflow_run(
+        self,
+        *,
+        run_id: str,
+        experiment_id: str,
+        config_hash: str,
+        dataset_id: str,
+        dataset_hash: str,
+        processing_policy_hash: str,
+        total_events: int,
+        now: datetime,
+    ) -> dict:
+        identity = (
+            experiment_id,
+            config_hash,
+            dataset_id,
+            dataset_hash,
+            processing_policy_hash,
+            total_events,
+        )
         with _connect(self.path) as db:
-            decisions = db.execute("SELECT COUNT(*) AS count FROM paper_decisions").fetchone()[
-                "count"
-            ]
+            db.execute(
+                "INSERT OR IGNORE INTO paper_workflow_runs VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, 0, NULL, 'NOT_STARTED', ?)",
+                (run_id, *identity, now.isoformat()),
+            )
+            row = db.execute(
+                "SELECT * FROM paper_workflow_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        actual = tuple(
+            row[name]
+            for name in (
+                "experiment_id",
+                "config_hash",
+                "dataset_id",
+                "dataset_hash",
+                "processing_policy_hash",
+                "total_events",
+            )
+        )
+        if actual != identity:
+            raise ValueError("Paper workflow run identity/configuration changed")
+        return dict(row)
+
+    def advance_workflow_run(
+        self,
+        run_id: str,
+        *,
+        expected_consumed: int,
+        consumed_events: int,
+        horizon: datetime,
+        status: str,
+        now: datetime,
+    ) -> None:
+        if consumed_events < expected_consumed:
+            raise ValueError("Paper workflow progress cannot move backward")
+        with _connect(self.path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT consumed_events, total_events FROM paper_workflow_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None or int(row["consumed_events"]) != expected_consumed:
+                raise ValueError("Paper workflow progress changed during batch")
+            if consumed_events > int(row["total_events"]):
+                raise ValueError("Paper workflow consumed beyond frozen input")
+            db.execute(
+                "UPDATE paper_workflow_runs SET consumed_events=?, last_horizon_utc=?, "
+                "status=?, updated_at_utc=? WHERE run_id=?",
+                (consumed_events, horizon.isoformat(), status, now.isoformat(), run_id),
+            )
+
+    def workflow_run(self, run_id: str) -> dict | None:
+        with _connect(self.path) as db:
+            row = db.execute(
+                "SELECT * FROM paper_workflow_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def decision_states(
+        self, run_id: str
+    ) -> tuple[set[tuple[str, str, str]], set[tuple[str, str, str]]]:
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "SELECT d.opportunity_id, d.revision_id, d.arm, d.outcome_json "
+                "FROM paper_decisions d JOIN paper_decision_evidence e "
+                "USING (opportunity_id, revision_id, arm) WHERE e.run_id=?",
+                (run_id,),
+            ).fetchall()
+        decisions = {(row["opportunity_id"], row["revision_id"], row["arm"]) for row in rows}
+        outcomes = {
+            (row["opportunity_id"], row["revision_id"], row["arm"])
+            for row in rows
+            if row["outcome_json"] is not None
+        }
+        return decisions, outcomes
+
+    def summary(self, *, experiment_id: str | None = None, include_protected: bool = True) -> dict:
+        where = ""
+        values: tuple[object, ...] = ()
+        if experiment_id is not None:
+            where = " WHERE e.experiment_id=?"
+            values = (experiment_id,)
+            if not include_protected:
+                where += " AND e.partition_name='DEVELOPMENT'"
+        with _connect(self.path) as db:
+            decisions = db.execute(
+                "SELECT COUNT(*) AS count FROM paper_decisions d "
+                "LEFT JOIN paper_decision_evidence e USING (opportunity_id, revision_id, arm)"
+                + where,
+                values,
+            ).fetchone()["count"]
             outcomes = db.execute(
-                "SELECT COUNT(*) AS count FROM paper_decisions WHERE outcome_json IS NOT NULL"
+                "SELECT COUNT(*) AS count FROM paper_decisions d "
+                "LEFT JOIN paper_decision_evidence e USING (opportunity_id, revision_id, arm)"
+                + where
+                + (" AND" if where else " WHERE")
+                + " d.outcome_json IS NOT NULL",
+                values,
             ).fetchone()["count"]
             gaps = db.execute("SELECT COUNT(*) AS count FROM paper_gaps").fetchone()["count"]
             modes = db.execute(
                 "SELECT evidence_mode, COUNT(*) AS count FROM paper_decision_evidence "
-                "GROUP BY evidence_mode"
+                + ("WHERE experiment_id=? " if experiment_id is not None else "")
+                + (
+                    "AND partition_name='DEVELOPMENT' "
+                    if experiment_id is not None and not include_protected
+                    else ""
+                )
+                + "GROUP BY evidence_mode",
+                values,
             ).fetchall()
         return {
             "status": "NOT_STARTED" if decisions == 0 else "EXPLORATORY",
@@ -1187,13 +1496,33 @@ class PaperLedger:
             ),
         }
 
-    def transitions(self, *, limit: int = 100, offset: int = 0) -> list[dict]:
+    def transitions(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        experiment_id: str | None = None,
+        include_protected: bool = True,
+    ) -> list[dict]:
         limit = min(max(limit, 1), 200)
         offset = max(offset, 0)
         with _connect(self.path) as db:
-            rows = db.execute(
-                "SELECT event_id, opportunity_id, revision_id, arm, state, occurred_at_utc "
-                "FROM paper_events ORDER BY occurred_at_utc, event_id LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
+            if experiment_id is None:
+                rows = db.execute(
+                    "SELECT event_id, opportunity_id, revision_id, arm, state, occurred_at_utc "
+                    "FROM paper_events ORDER BY occurred_at_utc, event_id LIMIT ? OFFSET ?",
+                    (limit, offset),
+                ).fetchall()
+            else:
+                partition_clause = (
+                    "" if include_protected else " AND e.partition_name='DEVELOPMENT'"
+                )
+                rows = db.execute(
+                    "SELECT p.event_id, p.opportunity_id, p.revision_id, p.arm, p.state, "
+                    "p.occurred_at_utc FROM paper_events p JOIN paper_decision_evidence e "
+                    "USING (opportunity_id, revision_id, arm) WHERE e.experiment_id=?"
+                    + partition_clause
+                    + " ORDER BY p.occurred_at_utc, p.event_id LIMIT ? OFFSET ?",
+                    (experiment_id, limit, offset),
+                ).fetchall()
         return [dict(row) for row in rows]

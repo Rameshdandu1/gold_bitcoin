@@ -1,43 +1,47 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: v0.6 implementation / Phase 6 closeout required. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: v0.6 implementation / Phase 6 offline closeout complete; external validation pending. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
 ## Phase 6 evidence architecture
 
-The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) qualifies the current
-implementation below. Complete [CODEX_PHASE_6_CLOSEOUT.md](prompts/CODEX_PHASE_6_CLOSEOUT.md) before
-claiming software acceptance or beginning routine live operation.
+The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) defined the closeout
+findings and acceptance gaps. Their offline disposition is recorded in the
+[Phase 6 closeout verification](docs/audits/phase-6-closeout-verification.md). Routine live operation
+still requires the separately documented external validation gates.
 
 The alert worker refreshes its clock at each risk attempt and again inside the short dispatch
 authorization transaction. The eligibility token and evaluated trade set use the same receive-time
-cutoff; the authorization records its actual time and a freshness deadline. The deadline still
-requires correction to use the same book event-time predicate as the actual quality check. Legacy
-jobs without complete frozen request policy are quarantined with a typed zero-call disposition.
+cutoff; the authorization records its actual time and the same book event-time freshness deadline
+used by the current quality check. Legacy jobs without complete frozen request policy are
+quarantined with a typed zero-call disposition.
 Migration `0006_phase6_evidence_integrity` is additive.
 
-Research stores provider completion and availability separately. The default projection uses
-envelope availability, but an explicitly supplied older payload clock currently overrides it; that
-conflict must be rejected or conservatively normalized. Modes and request/configuration digests
-are retained, while actual archived model identity remains an open contract. Synthetic/prospective
-mode conflicts are rejected. Quote anchors and isolated OHLC gaps are checked, but the final
-pre-entry quote interval and incomplete pre-entry bars still require correction.
+Research stores provider completion and availability separately. Provider evidence uses the
+authoritative envelope availability clock and rejects conflicting payload clocks. Modes,
+request/configuration digests and available provider/model provenance are retained; missing genuine
+provider identity remains unavailable rather than inferred. Synthetic/prospective mode conflicts
+are rejected. Quote and OHLC evaluation require anchored, contiguous coverage through entry and
+expiry, including complete pre-entry intervals.
 
 The scheduler evaluates every frozen cadence even during input silence. Source transitions are
-applied at their availability time to provider readiness and outcome eligibility. This closes the
-reviewed dirty-symbol/source-loss counterexamples; complete reuse of production admission and
-durable full-workflow checkpoint/resume remain separate open acceptance gates.
+applied at their availability time to provider readiness and outcome eligibility. Production
+consensus and connected research adapt their point-in-time evidence into one clock-injected
+application policy for revision, lifecycle, expiry, source, stop, spread and entry-drift checks.
 
-The connected `paper-workflow` command consumes the stored normalized journal and frozen decisions,
-writes decisions before their latency-adjusted eligible entry, and derives outcomes from later
-quotes/source events. Fixture runs are labelled `SIMULATED_PROSPECTIVE`, never prospective elapsed
-observation. Missing/expired model arms currently fail the entry chronology rule, and a warmup-only
-bounded run can report complete from zero decisions/outcomes; both need explicit terminal/progress
-semantics. The local-stream worker commits each event and cursor atomically and binds progress to
-source identity, generation and a consumed-prefix SHA-256. Ordinary research reads hide unopened
-holdout/crossing outcomes, but the paper derivation/read path still bypasses that policy.
+The connected `paper-workflow` command consumes the stored normalized journal in indexed 500-event
+batches, writes approved decisions before latency-adjusted eligible entry, and separately persists
+terminal unavailable/no-position decisions at their factual resolution. Run identity binds the
+experiment, configuration, dataset and processing/latency policy. Fixture runs are labelled
+`SIMULATED_PROSPECTIVE`, never prospective elapsed observation. Paper rows retain partition
+provenance; ordinary API, count and export paths hide protected/crossing outcomes until
+`final-holdout` records the frozen access identity. Legacy rows lacking provenance are hidden from
+scoped projections.
+
+The local-stream worker commits each event and cursor atomically and binds progress to source
+identity, generation and a consumed-prefix SHA-256.
 
 ## Phase 5 evidence foundation
 
@@ -50,11 +54,16 @@ order transport.
 
 Candidates, four-arm decisions and their target/configuration identities are immutable records.
 Phase 6 persists archived-provider decisions when their evidence becomes available, preserves
-availability fields/provenance and revalidates source state before entry. The review documents
-conflicting-clock and incomplete-path exceptions to the intended contract. Ordinary research
-aggregate/detail/API/export reads use a holdout projection; paper-derived records need equivalent
-partition provenance and protection. Complete production admission/lifecycle/risk reuse, durable
-derived-state checkpoints and bounded total processing remain explicit closeout gates.
+their clocks/provenance and revalidates source state before entry. Quote and OHLC evaluation now
+require complete pre-entry and outcome paths. Ordinary aggregate, detail, API and export reads use
+one holdout projection, with deliberate final access recorded before protected results become
+visible.
+
+`run-workflow` checkpoints manifest/config identities, the committed input offset, next evaluation
+clock, bounded trades/candles/books, source history, provider slots and pending scientific state.
+Fresh-process resumes skip the committed prefix and reject source/configuration drift. Output writes
+are immutable, so a fault before checkpoint advancement safely replays the current batch. The paper
+bridge uses the same retry-safe pattern and reports warmup, partial, unresolved and complete states.
 
 Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
 hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,

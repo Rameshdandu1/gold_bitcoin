@@ -246,9 +246,9 @@ def evaluate_quotes(
             events=(first.event_id,),
             complete=False,
         )
-    if (first_at - max(ready, coverage_previous_at)).total_seconds() > (
-        policy.maximum_quote_gap_seconds
-    ):
+    # Decision readiness is not market evidence. Coverage must remain continuous
+    # from the last factual quote through the first eligible entry quote.
+    if (first_at - coverage_previous_at).total_seconds() > (policy.maximum_quote_gap_seconds):
         return _outcome(
             candidate,
             decision,
@@ -482,6 +482,16 @@ def evaluate_bar_path(
                 events=(bar.event_id,),
                 complete=False,
             )
+        if not bar.complete:
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "INCOMPLETE",
+                "PARTIAL_BAR_IN_PATH",
+                events=(bar.event_id,),
+                complete=False,
+            )
         if bar.start_utc > coverage_end:
             return _outcome(
                 candidate,
@@ -531,16 +541,6 @@ def evaluate_bar_path(
                     complete=bar.complete,
                 )
             continue
-        if not bar.complete:
-            return _outcome(
-                candidate,
-                decision,
-                target_index,
-                "INCOMPLETE",
-                "PARTIAL_BAR_IN_OUTCOME_PATH",
-                events=(bar.event_id,),
-                complete=False,
-            )
         if target_hit and stop_hit:
             return _outcome(
                 candidate,

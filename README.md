@@ -26,17 +26,19 @@ creates synthetic verification streams; it does not establish strategy accuracy 
 .\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3
 .\.venv\Scripts\python.exe -m marketintel.research paper-workflow --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research evaluate --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
-.\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
+.\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
 ```
 
 Repeat `run-workflow`, `paper-workflow`, `evaluate` and `report` with the generated BTC manifest/config and
 `phase5-btc-workflow-v1`. Acceptance tests run all six real detectors; fixture provider completions
 remain labelled `SYNTHETIC_FIXTURE`. `paper-workflow` is explicitly
 `SIMULATED_PROSPECTIVE`: it durably records decisions before eligible fixture entry and derives
-outcomes from later normalized quotes. It is not elapsed real-time prospective evidence. The
-current paper command still needs the reviewed missing/expired-assessment and bounded-progress
-corrections; a positive complete fixture does not establish those paths. The external local-stream
-importer is separately bounded per cycle and disabled:
+outcomes from later normalized quotes. It is not elapsed real-time prospective evidence. Missing
+genuine assessments stay `UNAVAILABLE`. `run-workflow --maximum-events N` and
+`paper-workflow --maximum-events N` persist scoped progress; invoking the same command again resumes
+from the committed offset rather than claiming a 0/0 completion. Their normal paths use 500-event
+batches. The external local-stream importer is separately bounded
+and disabled:
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
@@ -49,15 +51,15 @@ importer is separately bounded per cycle and disabled:
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Review status (2026-11-22):** legacy zero-call quarantine, original alert-clock cases, ordinary
-holdout projections, mixed-mode rejection and local paper transaction controls have verified
-corrections. The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) documents
-remaining authorization freshness, conflicting availability, anchored coverage, paper-derived
-holdout exposure and paper terminal/progress issues. The
-[implementation verification](docs/audits/phase-6-verification.md) remains historical evidence of
-the checks it ran. Live provider/model entitlement, licensed data, genuine contemporary AI evidence,
-Slack delivery, forward observation, destination recovery, market-data soak and strategy performance
-are separate unverified gates.
+**Closeout status (2026-11-22):** Phase 6 also closes P6-01 through P6-05 and the three prior
+offline software gates. Production consensus and connected research share the deterministic
+revision/lifecycle/source/spread/drift policy; derived research state and paper progress resume
+durably; public processing is batch-bounded and measured by acceptance tests. See the
+[independent Phase 6 review](docs/audits/phase-6-independent-review.md) and
+[Phase 6 closeout verification](docs/audits/phase-6-closeout-verification.md). Live provider/model
+entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
+prospective observation duration, destination Windows Server recovery, market-data soak and
+empirical strategy performance remain unverified.
 
 ## What is already implemented in this starter
 - Authenticated FastAPI read-only health, engine, candidate, revision, lifecycle, provider-attempt,

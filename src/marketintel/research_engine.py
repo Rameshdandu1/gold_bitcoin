@@ -17,6 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from marketintel.application_policy import ApplicationPolicyInput, evaluate_application_policy
 from marketintel.models import (
     BookFeatures,
     Candle,
@@ -32,6 +33,7 @@ from marketintel.research_models import (
     ArmDecision,
     ArmRecord,
     DatasetManifest,
+    ExecutableQuote,
     ExperimentConfig,
     InstrumentVersion,
     OpportunityRecord,
@@ -63,6 +65,8 @@ class ProviderCompletion(BaseModel):
     evidence_mode: Literal[
         "RECORDED_PROSPECTIVE_MODEL", "RETROSPECTIVE_LLM_EXPLORATORY", "SYNTHETIC_FIXTURE"
     ]
+    requested_model_id: str | None = Field(default=None, min_length=1)
+    returned_model_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def completion_is_aware(self) -> ProviderCompletion:
@@ -242,6 +246,8 @@ class SharedResearchEngine:
             if payload.get("available_at_utc") is None:
                 payload["available_at_utc"] = row.available_at_utc
             completion = ProviderCompletion.model_validate(payload)
+            if completion.available_at_utc != row.available_at_utc:
+                raise ValueError("Provider payload availability conflicts with its envelope")
             if completion.completed_at_utc > row.available_at_utc:
                 raise ValueError("Provider completion cannot be available before completion")
             allowed_modes = {
@@ -263,7 +269,15 @@ class SharedResearchEngine:
             self.provider_completions[key] = completion
             return
         if row.kind == "EXECUTABLE_QUOTE":
-            # The journal-backed outcome evaluator validates the full quote contract.
+            payload.setdefault("event_id", row.observation_id)
+            payload.setdefault("venue", row.venue)
+            payload.setdefault("symbol", row.symbol)
+            payload.setdefault("observed_at_utc", row.exchange_time_utc)
+            payload.setdefault("available_at_utc", row.available_at_utc)
+            payload.pop("opportunity_id", None)
+            quote = ExecutableQuote.model_validate(payload)
+            if quote.available_at_utc != row.available_at_utc:
+                raise ValueError("Quote payload availability conflicts with its envelope")
             return
         if row.kind == "SOURCE_TRANSITION":
             transition = SourceTransition.model_validate(payload)
@@ -352,6 +366,89 @@ class SharedResearchEngine:
             "candle_limit_per_series": MAX_CANDLES_PER_SERIES,
         }
 
+    def checkpoint_state(self) -> dict:
+        """Return the complete bounded scientific state needed for a true resume."""
+        return {
+            "schema": "phase6-closeout-derived-state-v1",
+            "instruments": {
+                key: value.model_dump(mode="json") for key, value in self.instruments.items()
+            },
+            "trades": {
+                key: [value.model_dump(mode="json") for value in rows]
+                for key, rows in self.trades.items()
+            },
+            "candles": {
+                f"{key[0]}\u001f{key[1]}": [value.model_dump(mode="json") for value in rows]
+                for key, rows in self.candles.items()
+            },
+            "books": {key: value.model_dump(mode="json") for key, value in self.books.items()},
+            "book_sequences": {key: list(value) for key, value in self.book_sequences.items()},
+            "provider_completions": [
+                value.model_dump(mode="json") for value in self.provider_completions.values()
+            ],
+            "source_states": {
+                key: value.model_dump(mode="json") for key, value in self.source_states.items()
+            },
+            "source_history": {
+                key: [
+                    {
+                        "available_at_utc": at.isoformat(),
+                        "transition": value.model_dump(mode="json"),
+                    }
+                    for at, value in rows
+                ]
+                for key, rows in self.source_history.items()
+            },
+            "dirty_symbols": sorted(self.dirty_symbols),
+            "maximum_trade_state": self.maximum_trade_state,
+            "maximum_candle_state": self.maximum_candle_state,
+        }
+
+    @classmethod
+    def from_checkpoint(cls, manifest: DatasetManifest, payload: dict) -> SharedResearchEngine:
+        if payload.get("schema") != "phase6-closeout-derived-state-v1":
+            raise ValueError("Unsupported derived workflow checkpoint schema")
+        state = cls(manifest)
+        state.instruments = {
+            key: Instrument.model_validate(value)
+            for key, value in payload.get("instruments", {}).items()
+        }
+        for key, rows in payload.get("trades", {}).items():
+            state.trades[key].extend(TradeRecord.model_validate(value) for value in rows)
+        for encoded, rows in payload.get("candles", {}).items():
+            symbol, resolution = encoded.split("\u001f", 1)
+            state.candles[(symbol, resolution)].extend(
+                Candle.model_validate(value) for value in rows
+            )
+        state.books = {
+            key: BookFeatures.model_validate(value)
+            for key, value in payload.get("books", {}).items()
+        }
+        state.book_sequences = {
+            key: (int(value[0]), int(value[1]))
+            for key, value in payload.get("book_sequences", {}).items()
+        }
+        for raw in payload.get("provider_completions", []):
+            completion = ProviderCompletion.model_validate(raw)
+            key = (completion.candidate_id, completion.revision_id, completion.provider)
+            state.provider_completions[key] = completion
+        state.source_states = {
+            key: SourceTransition.model_validate(value)
+            for key, value in payload.get("source_states", {}).items()
+        }
+        for key, rows in payload.get("source_history", {}).items():
+            state.source_history[key].extend(
+                (
+                    datetime.fromisoformat(value["available_at_utc"]),
+                    SourceTransition.model_validate(value["transition"]),
+                )
+                for value in rows
+            )
+        state.dirty_symbols = set(payload.get("dirty_symbols", []))
+        state.maximum_trade_state = int(payload.get("maximum_trade_state", 0))
+        state.maximum_candle_state = int(payload.get("maximum_candle_state", 0))
+        return state
+
 
 def _provider_decision(
     candidate: ResearchCandidate,
@@ -383,6 +480,8 @@ def _provider_decision(
             provider_available_at_utc=available_at,
             request_digest=completion.request_digest,
             configuration_digest=completion.configuration_digest,
+            requested_model_id=completion.requested_model_id,
+            returned_model_id=completion.returned_model_id,
         )
     if completion.decision == "CONFIRM" and config.target_index not in (
         completion.supported_target_indices
@@ -408,6 +507,8 @@ def _provider_decision(
         provider_available_at_utc=available_at,
         request_digest=completion.request_digest,
         configuration_digest=completion.configuration_digest,
+        requested_model_id=completion.requested_model_id,
+        returned_model_id=completion.returned_model_id,
     )
 
 
@@ -417,6 +518,7 @@ def _decisions(
     completions: dict[tuple[str, str, str], ProviderCompletion],
     market_data_mode=None,
     source_history: tuple[tuple[datetime, SourceTransition], ...] = (),
+    book: BookFeatures | None = None,
 ) -> tuple[ArmDecision, ...]:
     rules = ArmDecision(
         arm="RULES_ONLY",
@@ -440,14 +542,58 @@ def _decisions(
 
     def apply_source_gate(decision: ArmDecision) -> ArmDecision:
         visible = [row for row in source_history if row[0] <= decision.ready_at_utc]
-        if decision.state != "APPROVED" or not visible or visible[-1][1].state == "AVAILABLE":
+        if decision.state != "APPROVED":
+            return decision
+        sources_current = not visible or visible[-1][1].state == "AVAILABLE"
+        bid = book.best_bid if book is not None and book.available else None
+        ask = book.best_ask if book is not None and book.available else None
+        stop_breached = bool(
+            bid is not None
+            and ask is not None
+            and (
+                bid <= candidate.invalidation
+                if candidate.direction == "BULLISH"
+                else ask >= candidate.invalidation
+            )
+        )
+        verdict = evaluate_application_policy(
+            ApplicationPolicyInput(
+                revision_current=True,
+                lifecycle_state="CANDIDATE",
+                observed_at_utc=candidate.observed_at_utc,
+                expires_at_utc=candidate.expires_at_utc,
+                evaluated_at_utc=decision.ready_at_utc,
+                market_observed_at_utc=(
+                    book.observed_at_utc
+                    if book is not None and book.observed_at_utc is not None
+                    else candidate.observed_at_utc
+                ),
+                sources_current=sources_current and book is not None and book.available,
+                event_order_ambiguous=False,
+                stop_breached=stop_breached,
+                direction=candidate.direction,
+                entry=candidate.entry,
+                invalidation=candidate.invalidation,
+                best_bid=bid,
+                best_ask=ask,
+                maximum_spread_bps=config.maximum_spread_bps,
+                maximum_entry_drift_bps=config.maximum_entry_drift_bps,
+            )
+        )
+        target = candidate.targets[config.target_index - 1]
+        target_exhausted = bool(
+            bid is not None
+            and ask is not None
+            and (bid >= target if candidate.direction == "BULLISH" else ask <= target)
+        )
+        if verdict.eligible and not target_exhausted:
             return decision
         return decision.model_copy(
             update={
                 "state": "WAIT",
                 "reason": (
-                    "Current source state at provider readiness was "
-                    f"{visible[-1][1].state}: {visible[-1][1].reason}"
+                    "Shared application policy blocked provider-ready entry: "
+                    + ("TARGET_EXHAUSTED" if target_exhausted else ",".join(verdict.failed_codes))
                 ),
             }
         )
@@ -499,10 +645,24 @@ def run_shared_workflow(
     store: ResearchStore,
     *,
     presorted: bool = False,
+    maximum_observations: int | None = None,
 ) -> dict:
     """Run engines first, then evaluate outcomes from the immutable journal."""
+    if maximum_observations is not None and maximum_observations < 1:
+        raise ValueError("Maximum workflow observations must be positive")
     store.create_experiment(manifest, config)
-    state = SharedResearchEngine(manifest)
+    checkpoint = store.workflow_checkpoint(config.experiment_id)
+    config_hash = config.canonical_config_hash()
+    if checkpoint is not None and (
+        checkpoint["manifest_hash"] != manifest.content_hash
+        or checkpoint["config_hash"] != config_hash
+    ):
+        raise ValueError("Derived workflow checkpoint source/configuration changed")
+    state = (
+        SharedResearchEngine.from_checkpoint(manifest, checkpoint["state"])
+        if checkpoint is not None
+        else SharedResearchEngine(manifest)
+    )
     ordered: Iterable[ReplayObservation]
     if presorted:
         ordered = observations
@@ -515,13 +675,41 @@ def run_shared_workflow(
                 row.observation_id,
             ),
         )
-    next_evaluation = config.evaluation_start_utc
+    next_evaluation = (
+        datetime.fromisoformat(checkpoint["next_evaluation_utc"])
+        if checkpoint is not None
+        else config.evaluation_start_utc
+    )
     cadence = timedelta(seconds=config.evaluation_cadence_seconds)
     journal_batch: list[ReplayObservation] = []
     seen = {(row.opportunity_id, row.revision_id) for row in store.candidates(config.experiment_id)}
-    generated = 0
-    evaluations = 0
-    observations_count = 0
+    generated = int(checkpoint["generated_candidates"]) if checkpoint is not None else 0
+    evaluations = int(checkpoint["engine_evaluations"]) if checkpoint is not None else 0
+    start_offset = int(checkpoint["input_offset"]) if checkpoint is not None else 0
+    observations_count = start_offset
+    processed_this_run = 0
+    expected_observations = sum(row.record_count for row in manifest.files)
+
+    def save_checkpoint(status: str) -> None:
+        store.save_workflow_checkpoint(
+            config.experiment_id,
+            manifest_hash=manifest.content_hash,
+            config_hash=config_hash,
+            input_offset=observations_count,
+            next_evaluation_utc=next_evaluation,
+            state=state.checkpoint_state(),
+            generated_candidates=generated,
+            engine_evaluations=evaluations,
+            status=status,
+            updated_at_utc=(
+                config.evaluation_start_utc
+                if observations_count == 0
+                else max(
+                    (row.available_at_utc for row in journal_batch),
+                    default=config.evaluation_start_utc,
+                )
+            ),
+        )
 
     def persist_available_provider_decisions(at: datetime) -> None:
         for candidate in store.candidates(config.experiment_id):
@@ -531,6 +719,7 @@ def run_shared_workflow(
                 state.provider_completions,
                 manifest.data_mode,
                 tuple(state.source_history[candidate.symbol]),
+                state.books.get(candidate.symbol),
             )
             keys = {
                 "RULES_PLUS_GPT": (candidate.opportunity_id, candidate.revision_id, "GPT"),
@@ -579,7 +768,13 @@ def run_shared_workflow(
                 candidate,
                 persisted_at=at,
             )
-            rules = _decisions(candidate, config, {}, manifest.data_mode)[0]
+            rules = _decisions(
+                candidate,
+                config,
+                {},
+                manifest.data_mode,
+                book=state.books.get(candidate.symbol),
+            )[0]
             store.save_arm_decision(
                 config.experiment_id,
                 candidate.opportunity_id,
@@ -590,26 +785,56 @@ def run_shared_workflow(
             seen.add(identity)
             generated += 1
 
-    for row in ordered:
+    for input_index, row in enumerate(ordered, start=1):
+        if input_index <= start_offset:
+            continue
+        if maximum_observations is not None and processed_this_run >= maximum_observations:
+            break
         observations_count += 1
+        processed_this_run += 1
         if row.available_at_utc < config.evaluation_start_utc:
             state.apply(row)
-            journal_batch.append(row)
-            continue
-        while next_evaluation < row.available_at_utc and (
-            next_evaluation <= config.evaluation_end_utc
-        ):
-            evaluate(next_evaluation)
-            next_evaluation += cadence
-        state.apply(row)
-        if row.kind in {"PROVIDER_COMPLETION", "SOURCE_TRANSITION"}:
-            persist_available_provider_decisions(row.available_at_utc)
+        else:
+            while next_evaluation < row.available_at_utc and (
+                next_evaluation <= config.evaluation_end_utc
+            ):
+                evaluate(next_evaluation)
+                next_evaluation += cadence
+            state.apply(row)
+            if row.kind in {"PROVIDER_COMPLETION", "SOURCE_TRANSITION"}:
+                persist_available_provider_decisions(row.available_at_utc)
         journal_batch.append(row)
         if len(journal_batch) >= 500:
             store.save_observations(config.experiment_id, journal_batch)
+            save_checkpoint("RUNNING")
             journal_batch.clear()
     if journal_batch:
         store.save_observations(config.experiment_id, journal_batch)
+    input_complete = (
+        observations_count >= expected_observations
+        if expected_observations
+        else maximum_observations is None
+    )
+    if not input_complete:
+        save_checkpoint("BOUNDED_PARTIAL")
+        return {
+            "experiment_id": config.experiment_id,
+            "dataset_id": manifest.dataset_id,
+            "dataset_hash": manifest.content_hash,
+            "config_hash": config_hash,
+            "classification": "HYPOTHETICAL_EXPLORATORY",
+            "status": "DERIVED_WORKFLOW_PARTIAL",
+            "observations": observations_count,
+            "observations_total": expected_observations,
+            "observations_remaining": max(expected_observations - observations_count, 0),
+            "opportunities_generated": generated,
+            "engine_evaluations": evaluations,
+            "memory": state.memory_evidence(),
+            "external_calls": 0,
+            "real_notifications": 0,
+            "orders": 0,
+        }
+    save_checkpoint("INPUT_COMPLETE")
     while next_evaluation <= config.evaluation_end_utc:
         evaluate(next_evaluation)
         next_evaluation += cadence
@@ -622,6 +847,7 @@ def run_shared_workflow(
             state.provider_completions,
             manifest.data_mode,
             tuple(state.source_history[candidate.symbol]),
+            state.books.get(candidate.symbol),
         )
         for decision in decisions:
             store.save_arm_decision(
@@ -697,6 +923,7 @@ def run_shared_workflow(
         orders=0,
         measured_at=config.evaluation_end_utc,
     )
+    save_checkpoint("COMPLETE")
     return {
         "experiment_id": config.experiment_id,
         "dataset_id": manifest.dataset_id,
@@ -713,4 +940,5 @@ def run_shared_workflow(
         "real_notifications": 0,
         "orders": 0,
         "classification": "HYPOTHETICAL_EXPLORATORY",
+        "status": "DERIVED_WORKFLOW_COMPLETE",
     }

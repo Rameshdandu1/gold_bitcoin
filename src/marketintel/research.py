@@ -12,7 +12,7 @@ import hashlib
 import html
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -27,7 +27,6 @@ from marketintel.research_models import (
     ExperimentConfig,
     OpportunityRecord,
     ReplayCheckpoint,
-    ReplayObservation,
 )
 from marketintel.research_replay import (
     iter_observations,
@@ -152,19 +151,25 @@ def command_run_workflow(args: argparse.Namespace) -> int:
             Path(temporary) / "sort.sqlite3",
             batch_size=args.chunk_size,
         )
-        result = run_shared_workflow(
-            manifest,
-            config,
-            observations,
-            store,
-            presorted=True,
-        )
+        try:
+            result = run_shared_workflow(
+                manifest,
+                config,
+                observations,
+                store,
+                presorted=True,
+                maximum_observations=args.maximum_events,
+            )
+        finally:
+            close = getattr(observations, "close", None)
+            if close is not None:
+                close()
     print(json.dumps(result, sort_keys=True, default=str))
     return 0
 
 
 def command_paper_workflow(args: argparse.Namespace) -> int:
-    """Derive simulated prospective paper outcomes from later normalized observations."""
+    """Resume a bounded simulated-prospective projection from normalized observations."""
     if args.processing_delay_ms < 0 or args.entry_latency_ms < 0:
         raise ValueError("Paper processing and entry latency must be non-negative")
     if args.maximum_events is not None and args.maximum_events < 1:
@@ -180,54 +185,74 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
         Path(args.paper_database).resolve(),
         production_path=Path(args.production_database).resolve(),
     )
-    observations = store.observations(args.experiment_id)
-    if args.maximum_events is not None:
-        observations = observations[: args.maximum_events]
-    if not observations:
-        print(json.dumps({"status": "NO_OBSERVATIONS", **ledger.summary()}, sort_keys=True))
-        return 0
-    horizon = observations[-1].available_at_utc
     processing_delay = timedelta(milliseconds=args.processing_delay_ms)
     entry_latency_ms = max(args.entry_latency_ms, args.processing_delay_ms + 1)
-    candidates = store.candidates(args.experiment_id)
+    config_hash = config.canonical_config_hash()
+    holdout_open = store.holdout_is_open(args.experiment_id, config_hash)
+    policy_contract = {
+        "schema": "phase6-closeout-paper-v1",
+        "processing_delay_ms": args.processing_delay_ms,
+        "entry_latency_ms": entry_latency_ms,
+        "holdout_state": "OPEN" if holdout_open else "PROTECTED",
+    }
+    policy_hash = hashlib.sha256(
+        json.dumps(policy_contract, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    run_id = hashlib.sha256(
+        f"{args.experiment_id}|{config_hash}|{manifest.content_hash}|{policy_hash}".encode()
+    ).hexdigest()
+    total_events = store.observation_count(args.experiment_id)
+    if total_events == 0:
+        print(json.dumps({"status": "NO_OBSERVATIONS", **ledger.summary()}, sort_keys=True))
+        return 0
+    run = ledger.initialize_workflow_run(
+        run_id=run_id,
+        experiment_id=args.experiment_id,
+        config_hash=config_hash,
+        dataset_id=manifest.dataset_id,
+        dataset_hash=manifest.content_hash,
+        processing_policy_hash=policy_hash,
+        total_events=total_events,
+        now=datetime.now(UTC),
+    )
+    all_candidates = store.candidates(args.experiment_id)
+
+    def partition(candidate) -> str:
+        if config.holdout_start_utc is None or candidate.expires_at_utc < config.holdout_start_utc:
+            return "DEVELOPMENT"
+        return "PROTECTED_OR_CROSSING_HOLDOUT"
+
+    protected = [candidate for candidate in all_candidates if partition(candidate) != "DEVELOPMENT"]
+    candidates = [
+        candidate
+        for candidate in all_candidates
+        if partition(candidate) == "DEVELOPMENT" or holdout_open
+    ]
     decisions = {
         (candidate.opportunity_id, candidate.revision_id): store.arm_decisions(
             args.experiment_id, candidate.opportunity_id, candidate.revision_id
         )
         for candidate in candidates
     }
-    timeline: list[tuple[datetime, int, str, object]] = [
-        (row.available_at_utc, 0, row.observation_id, row) for row in observations
-    ]
-    for candidate in candidates:
-        for arm in decisions[(candidate.opportunity_id, candidate.revision_id)]:
-            persist_at = arm.ready_at_utc + processing_delay
-            if persist_at <= horizon:
-                timeline.append(
-                    (
-                        persist_at,
-                        1,
-                        f"{candidate.opportunity_id}:{candidate.revision_id}:{arm.arm}",
-                        (candidate, arm),
-                    )
-                )
-        if candidate.expires_at_utc <= horizon:
-            timeline.append(
-                (
-                    candidate.expires_at_utc,
-                    2,
-                    f"expiry:{candidate.opportunity_id}:{candidate.revision_id}",
-                    candidate,
-                )
-            )
-    timeline.sort(key=lambda item: (item[0], item[1], item[2]))
-    persisted: set[tuple[str, str, str]] = set()
-    resolved: set[tuple[str, str, str]] = set()
-    visible_transitions: dict[str, list[tuple[datetime, str]]] = {}
+    persisted, resolved = ledger.decision_states(run_id)
+    maximum_input_batch = 0
+    maximum_timeline_batch = 0
+    maximum_quotes_per_candidate = 0
 
     def attempt_outcomes(at) -> None:
+        nonlocal maximum_quotes_per_candidate
         for candidate in candidates:
-            source_rows = tuple(visible_transitions.get(candidate.symbol, ()))
+            source_rows = tuple(
+                (row.available_at_utc, str(row.payload["state"]))
+                for row in store.observation_page(
+                    args.experiment_id,
+                    offset=0,
+                    limit=10_000,
+                    kind="SOURCE_TRANSITION",
+                    through_utc=at,
+                )
+                if row.symbol == candidate.symbol
+            )
             quotes = [
                 quote
                 for quote in store.quotes(
@@ -237,6 +262,7 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                 )
                 if (quote.available_at_utc or quote.observed_at_utc) <= at
             ]
+            maximum_quotes_per_candidate = max(maximum_quotes_per_candidate, len(quotes))
             for arm in decisions[(candidate.opportunity_id, candidate.revision_id)]:
                 identity = (candidate.opportunity_id, candidate.revision_id, arm.arm)
                 if identity not in persisted or identity in resolved:
@@ -278,33 +304,99 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                 )
                 resolved.add(identity)
 
-    for at, _, _, item in timeline:
-        if isinstance(item, tuple):
-            candidate, arm = item
-            ledger.record_decision(
-                candidate.opportunity_id,
-                candidate.revision_id,
-                arm,
-                candidate=candidate,
-                config_hash=config.canonical_config_hash(),
-                target_index=config.target_index,
-                source_identity=manifest.content_hash,
-                evidence_mode="SIMULATED_PROSPECTIVE",
-                entry_latency_ms=entry_latency_ms,
-                recorded_at=at,
-            )
-            persisted.add((candidate.opportunity_id, candidate.revision_id, arm.arm))
-        elif isinstance(item, ReplayObservation) and item.kind == "SOURCE_TRANSITION":
-            visible_transitions.setdefault(item.symbol, []).append(
-                (item.available_at_utc, str(item.payload["state"]))
-            )
-        attempt_outcomes(at)
-    summary = ledger.summary()
-    paper_status = (
-        "SIMULATED_PROSPECTIVE_COMPLETE"
-        if summary["decisions"] == summary["outcomes"]
-        else "SIMULATED_PROSPECTIVE_PARTIAL"
-    )
+    consumed = int(run["consumed_events"])
+    invocation_budget = args.maximum_events
+    while consumed < total_events and (invocation_budget is None or invocation_budget > 0):
+        batch_limit = min(500, total_events - consumed)
+        if invocation_budget is not None:
+            batch_limit = min(batch_limit, invocation_budget)
+        observations = store.observation_page(
+            args.experiment_id, offset=consumed, limit=batch_limit
+        )
+        if not observations:
+            raise ValueError("Frozen paper input ended before its recorded event count")
+        maximum_input_batch = max(maximum_input_batch, len(observations))
+        horizon = observations[-1].available_at_utc
+        timeline: list[tuple[datetime, int, str, object]] = [
+            (row.available_at_utc, 0, row.observation_id, row)
+            for row in observations
+            if row.kind == "SOURCE_TRANSITION"
+        ]
+        for candidate in candidates:
+            for arm in decisions[(candidate.opportunity_id, candidate.revision_id)]:
+                identity = (candidate.opportunity_id, candidate.revision_id, arm.arm)
+                persist_at = arm.ready_at_utc + processing_delay
+                if identity not in persisted and persist_at <= horizon:
+                    timeline.append(
+                        (
+                            persist_at,
+                            1,
+                            f"{candidate.opportunity_id}:{candidate.revision_id}:{arm.arm}",
+                            (candidate, arm),
+                        )
+                    )
+            if candidate.expires_at_utc <= horizon:
+                timeline.append(
+                    (
+                        candidate.expires_at_utc,
+                        2,
+                        f"expiry:{candidate.opportunity_id}:{candidate.revision_id}",
+                        candidate,
+                    )
+                )
+        timeline.append((horizon, 3, f"horizon:{consumed + len(observations)}", None))
+        timeline.sort(key=lambda item: (item[0], item[1], item[2]))
+        maximum_timeline_batch = max(maximum_timeline_batch, len(timeline))
+        for at, _, _, item in timeline:
+            if isinstance(item, tuple):
+                candidate, arm = item
+                ledger.record_decision(
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    arm,
+                    candidate=candidate,
+                    config_hash=config_hash,
+                    target_index=config.target_index,
+                    source_identity=manifest.content_hash,
+                    evidence_mode="SIMULATED_PROSPECTIVE",
+                    entry_latency_ms=entry_latency_ms,
+                    recorded_at=at,
+                    experiment_id=args.experiment_id,
+                    dataset_id=manifest.dataset_id,
+                    dataset_hash=manifest.content_hash,
+                    partition=partition(candidate),
+                    run_id=run_id,
+                    processing_policy_hash=policy_hash,
+                )
+                persisted.add((candidate.opportunity_id, candidate.revision_id, arm.arm))
+            attempt_outcomes(at)
+        previous_consumed = consumed
+        consumed += len(observations)
+        if invocation_budget is not None:
+            invocation_budget -= len(observations)
+        interim = "INPUT_COMPLETE" if consumed == total_events else "BOUNDED_PARTIAL"
+        ledger.advance_workflow_run(
+            run_id,
+            expected_consumed=previous_consumed,
+            consumed_events=consumed,
+            horizon=horizon,
+            status=interim,
+            now=datetime.now(UTC),
+        )
+    summary = ledger.summary(experiment_id=args.experiment_id, include_protected=holdout_open)
+    expected_arms = sum(len(rows) for rows in decisions.values())
+    if protected and not holdout_open and not candidates and consumed == total_events:
+        paper_status = "HOLDOUT_PROTECTED"
+    elif consumed < total_events:
+        paper_status = (
+            "SIMULATED_PROSPECTIVE_WARMUP_PARTIAL"
+            if summary["decisions"] == 0
+            else "SIMULATED_PROSPECTIVE_PARTIAL"
+        )
+    elif summary["outcomes"] == expected_arms:
+        paper_status = "SIMULATED_PROSPECTIVE_COMPLETE"
+    else:
+        paper_status = "SIMULATED_PROSPECTIVE_UNRESOLVED"
     print(
         json.dumps(
             {
@@ -313,9 +405,24 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                 "experiment_id": args.experiment_id,
                 "data_mode": manifest.data_mode,
                 "source_identity": manifest.content_hash,
-                "events_consumed": len(observations),
+                "run_id": run_id,
+                "events_consumed": consumed,
+                "events_total": total_events,
+                "events_remaining": total_events - consumed,
+                "input_complete": consumed == total_events,
+                "expected_terminal_arms": expected_arms,
+                "pending_terminal_arms": max(expected_arms - summary["outcomes"], 0),
+                "protected_candidates": len(protected),
+                "holdout_state": "OPEN" if holdout_open else "PROTECTED",
                 "processing_delay_ms": args.processing_delay_ms,
                 "entry_latency_ms": entry_latency_ms,
+                "resource_evidence": {
+                    "input_batch_limit": 500,
+                    "maximum_input_batch": maximum_input_batch,
+                    "maximum_timeline_batch": maximum_timeline_batch,
+                    "active_candidate_count": len(candidates),
+                    "maximum_quotes_per_candidate": maximum_quotes_per_candidate,
+                },
             },
             sort_keys=True,
         )
@@ -508,6 +615,30 @@ def command_report(args: argparse.Namespace) -> int:
     with (output / "selected-opportunities.jsonl").open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(row.model_dump_json() + "\n")
+    if args.paper_database:
+        paper = PaperLedger(
+            Path(args.paper_database).resolve(),
+            production_path=Path(args.production_database).resolve(),
+        )
+        holdout_open = store.holdout_is_open(args.experiment_id, config.canonical_config_hash())
+        _write_json(
+            output / "paper-summary.json",
+            paper.summary(experiment_id=args.experiment_id, include_protected=holdout_open),
+        )
+        with (output / "paper-transitions.jsonl").open("w", encoding="utf-8") as handle:
+            offset = 0
+            while True:
+                transitions = paper.transitions(
+                    experiment_id=args.experiment_id,
+                    include_protected=holdout_open,
+                    limit=200,
+                    offset=offset,
+                )
+                if not transitions:
+                    break
+                for transition in transitions:
+                    handle.write(json.dumps(transition, sort_keys=True) + "\n")
+                offset += len(transitions)
     _checksums(output)
     print(
         json.dumps(
@@ -540,6 +671,7 @@ def parser() -> argparse.ArgumentParser:
     workflow.add_argument("--database", required=True)
     workflow.add_argument("--production-database", default="data/marketintel.sqlite3")
     workflow.add_argument("--chunk-size", type=int, default=2_000)
+    workflow.add_argument("--maximum-events", type=int)
     workflow.set_defaults(handler=command_run_workflow)
     paper = commands.add_parser("paper-workflow")
     paper.add_argument("--database", required=True)
@@ -566,6 +698,7 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--production-database", default="data/marketintel.sqlite3")
     report.add_argument("--experiment-id", required=True)
     report.add_argument("--output", required=True)
+    report.add_argument("--paper-database")
     report.set_defaults(handler=command_report)
     return root
 

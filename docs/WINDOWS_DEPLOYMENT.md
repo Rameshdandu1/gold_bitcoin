@@ -122,7 +122,7 @@ Use the repository virtual environment and Windows paths. Research and paper fil
 .\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3
 .\.venv\Scripts\python.exe -m marketintel.research paper-workflow --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
 .\.venv\Scripts\python.exe -m marketintel.research evaluate --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
-.\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
+.\.venv\Scripts\python.exe -m marketintel.research report --database data\gold-research.sqlite3 --paper-database data\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --output data\gold-report
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
 ```
 
@@ -136,12 +136,43 @@ reordering or truncation before the committed cursor is refused using a consumed
 Each imported event and cursor advance commit atomically. The worker is bounded by `--once` and
 cannot send orders.
 
+To rehearse restart recovery, stop after a bounded committed prefix and invoke the same command
+again. Do not change the manifest, configuration, processing delay or entry latency under the same
+run identity:
+
+```powershell
+.\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-resume.sqlite3 --production-database data\marketintel.sqlite3 --maximum-events 500
+.\.venv\Scripts\python.exe -m marketintel.research run-workflow --manifest data\phase5-fixtures\gold-manifest.json --config data\phase5-fixtures\gold-experiment.json --database data\gold-resume.sqlite3 --production-database data\marketintel.sqlite3
+.\.venv\Scripts\python.exe -m marketintel.research paper-workflow --database data\gold-resume.sqlite3 --paper-database data\gold-paper-resume.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1 --maximum-events 100
+.\.venv\Scripts\python.exe -m marketintel.research paper-workflow --database data\gold-resume.sqlite3 --paper-database data\gold-paper-resume.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
+```
+
+`DERIVED_WORKFLOW_PARTIAL` and `SIMULATED_PROSPECTIVE_WARMUP_PARTIAL` are expected after the first
+bounded calls. Completion requires `input_complete=true`, no pending terminal arms and the frozen
+input count. Back up research and paper databases together; never copy only a checkpoint table.
+
 Back up production, research and paper SQLite files with their manifests, configurations, source
 generation records, checkpoints and report `SHA256SUMS`. A safe restore stops all writers, verifies
 each database, restores the matching artifact set, then reruns the bounded command. Do not copy a
 cursor without its exact source identity/generation. Destination-server Task Scheduler install,
 reboot/restore, log rotation and long paper/live soaks were not run in Phase 6. Native Windows
 checks validate code paths, not the destination host.
+
+### Controlled live-validation checklist (not executed by offline closeout)
+
+1. Start with all external flags false; record host/version/config fingerprints and verify ACLs,
+   UTC synchronization, service restart, reboot and matching-database backup/restore.
+2. With bounded authorization, discover current Delta BTC and Gold instruments, record product/unit
+   versions, collect a short trade/book sample, interrupt during a sequence gap and prove snapshot
+   resynchronization before eligibility returns.
+3. Verify CoinGlass entitlement/pair support and Gold-reference availability; retain unavailable
+   states rather than substituting data.
+4. Under explicit provider budgets, verify configured and returned GPT/Claude model identities with
+   the same canonical input. One-provider failure must remain WAIT/unavailable.
+5. Send one explicitly authorized test notification only after stale/terminal suppression checks;
+   retain the remote receipt or `RECEIPT_UNKNOWN` state.
+6. Freeze prospective selection/cost rules before collection. Synthetic/retrospective outcomes do
+   not count as elapsed prospective evidence.
 
 ## 7. Operational acceptance still required
 

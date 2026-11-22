@@ -1,5 +1,9 @@
 # Phase 6 verification — evidence integrity and workflow acceptance
 
+> Historical implementation report. The later independent review found P6-01 through P6-05 and
+> three open software gates. Their offline disposition is recorded without rewriting this evidence
+> in [phase-6-closeout-verification.md](phase-6-closeout-verification.md).
+
 Date: 2026-11-22  
 Platform: native Windows development workstation, Python 3.13 virtual environment  
 Starting code: `dfbb59ea91bfc034f4ab4ffa76c0dbda094f5a31`  
