@@ -2,6 +2,14 @@
 
 Date: 2026-11-22. Scope: offline evidence integrity and complete workflow acceptance only.
 
+> **Later independent disposition, 2026-11-22:** This implementation report is retained as the
+> original executed evidence. The [independent closeout review](phase-6-closeout-independent-review.md)
+> at `81f86f79cb943c8cb837aae4f800135948f89f32` confirms P6-01 through P6-05 and tested resume controls,
+> but reproduces P6C-01/02 contemporaneous decision/lifecycle failures and P6C-03 whole-workflow
+> memory growth. The full shared-policy and bounded-memory acceptance claims below are therefore
+> qualified; those two existing gates remain open. Follow
+> [CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md](../../prompts/CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md).
+
 ## Frozen identities and evidence limits
 
 - Starting code: `f66ac11f4d958a0075d7e22a5d841256e19b55df` (merged PR #10).

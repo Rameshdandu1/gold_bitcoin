@@ -1,24 +1,28 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
-## Current status: Phase 6 offline closeout complete
+## Current status: Phase 6 workflow acceptance corrections pending
 
-The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) of merged PR #10 at
-`f66ac11f4d958a0075d7e22a5d841256e19b55df` passed the 237-test baseline and positive public Gold/BTC
-workflows. It reproduced five finding groups and confirmed three unfinished software acceptance
-gates. PR #12 implemented their offline disposition; see
-[CODEX_PHASE_6_CLOSEOUT.md](prompts/CODEX_PHASE_6_CLOSEOUT.md) and the
-[closeout verification report](docs/audits/phase-6-closeout-verification.md).
+The [independent closeout review](docs/audits/phase-6-closeout-independent-review.md) of merged PR
+#12/#13 at `81f86f79cb943c8cb837aae4f800135948f89f32` passes the 251-test baseline, public Gold/BTC
+workflows and all five exact P6-01 through P6-05 retests. It also reproduces three remaining issues:
+later book updates conflict with earlier immutable decisions, research misses a production-terminal
+executed stop, and full quote-history loading defeats the whole-workflow memory bound.
 
-The remaining sequence is controlled Windows/live integration validation, then prospective paper
-observation. Derivatives/execution remain deferred. External prerequisites are not implied by the
-completed offline software work.
+Next coding task: [CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md](prompts/CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md).
+The original [closeout verification report](docs/audits/phase-6-closeout-verification.md) is retained
+as historical implementation evidence; its full-acceptance claim is qualified by the independent
+review. The tested derived checkpoint and paper resume controls remain verified.
+
+After those existing software requirements pass, the remaining sequence is controlled Windows/live
+integration validation, then prospective paper observation. Derivatives/execution remain deferred.
 
 ## Phase 6 evidence-integrity workflow
 
 Phase 6 adds availability/provenance fields, cadence evaluation, quote-side outcomes, protected
 research and paper reads and a connected synthetic paper command. Closeout corrected the reviewed
-clock-conflict, coverage, paper-holdout and terminal/progress failures, then completed shared policy,
-derived-state resume and bounded whole-workflow processing. Research and paper state remain isolated
+clock-conflict, coverage, paper-holdout and terminal/progress failures. Shared predicates, derived-state
+resume and 500-event input pages are implemented; complete policy parity and whole-workflow memory
+acceptance remain open. Research and paper state remain isolated
 from production review, budget and notification state. The included generator creates synthetic
 verification streams; it does not establish strategy accuracy or profitability.
 
@@ -53,12 +57,11 @@ and disabled:
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Closeout status (2026-11-22):** Phase 6 also closes P6-01 through P6-05 and the three prior
-offline software gates. Production consensus and connected research share the deterministic
-revision/lifecycle/source/spread/drift policy; derived research state and paper progress resume
-durably; public processing is batch-bounded and measured by acceptance tests. See the
-[independent Phase 6 review](docs/audits/phase-6-independent-review.md) and
-[Phase 6 closeout verification](docs/audits/phase-6-closeout-verification.md). Live provider/model
+**Independent closeout status (2026-11-22):** P6-01 through P6-05 pass their exact retests, and
+the tested derived-state/paper resume controls pass. Three issues remain within the existing shared
+application-policy and whole-workflow memory gates; see the
+[independent closeout review](docs/audits/phase-6-closeout-independent-review.md). Input batching
+alone does not bound all retained evidence. Live provider/model
 entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
 prospective observation duration, destination Windows Server recovery, market-data soak and
 empirical strategy performance remain unverified.
