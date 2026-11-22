@@ -14,8 +14,8 @@ The project uses four-part release versions for shipped milestones.
   derives simulated outcomes from later normalized observations for all six Gold/BTC engines.
 - Add additive Phase 6 dispatch evidence migration, versioned research outcomes, consumed-prefix
   paper progress and central holdout-aware read projections.
-- Add one shared clock-injected production/research application policy, durable derived-workflow
-  checkpoints and bounded 500-event public research/paper processing.
+- Add shared clock-injected production/research predicates, durable derived-workflow checkpoints
+  and 500-event public research/paper input pages.
 
 ### Fixed
 
@@ -37,9 +37,12 @@ The project uses four-part release versions for shipped milestones.
 - Verification uses zero-network `SYNTHETIC_FIXTURE` streams, archived fake provider rows and fake
   notification transports. Connected paper results are `SIMULATED_PROSPECTIVE`, not elapsed forward
   observation or empirical performance.
-- Shared-policy parity, complete derived-workflow checkpoint/resume and bounded public processing
-  are verified offline. Licensed data, genuine provider access, destination Windows recovery and
-  external soaks remain unverified.
+- The independent closeout review verifies P6-01 through P6-05 and tested derived-workflow/paper
+  resume, but leaves P6C-01/02 application parity and P6C-03 whole-workflow memory open. An ordinary
+  later book can conflict with a frozen arm; research misses an executed terminal stop; quote
+  projection still loads full history. See `docs/audits/phase-6-closeout-independent-review.md`.
+- Licensed data, genuine provider access, destination Windows recovery and external soaks remain
+  unverified and follow software acceptance.
 - Live ingestion, AI, alerts and paper collection stay disabled by default. Orders remain absent and
   `TRADING_ENABLED=true` remains refused.
 
