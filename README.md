@@ -1,24 +1,26 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
-## Current task: Phase 6 closeout
+## Current status: Phase 6 offline closeout complete
 
 The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) of merged PR #10 at
 `f66ac11f4d958a0075d7e22a5d841256e19b55df` passed the 237-test baseline and positive public Gold/BTC
-workflows. It reproduced five remaining finding groups and confirmed three unfinished software
-acceptance gates. Follow [CODEX_PHASE_6_CLOSEOUT.md](prompts/CODEX_PHASE_6_CLOSEOUT.md).
+workflows. It reproduced five finding groups and confirmed three unfinished software acceptance
+gates. PR #12 implemented their offline disposition; see
+[CODEX_PHASE_6_CLOSEOUT.md](prompts/CODEX_PHASE_6_CLOSEOUT.md) and the
+[closeout verification report](docs/audits/phase-6-closeout-verification.md).
 
-The remaining sequence is Phase 6 software closeout, controlled Windows/live integration validation,
-then prospective paper observation. Derivatives/execution remain deferred. The next task completes
-existing requirements; it does not expand the feature scope.
+The remaining sequence is controlled Windows/live integration validation, then prospective paper
+observation. Derivatives/execution remain deferred. External prerequisites are not implied by the
+completed offline software work.
 
 ## Phase 6 evidence-integrity workflow
 
 Phase 6 adds availability/provenance fields, cadence evaluation, quote-side outcomes, protected
-ordinary research reads and a connected synthetic paper command. The review identified remaining
-clock-conflict, coverage, paper-holdout and terminal/progress failures; complete shared policy,
-derived-state resume and bounded whole-workflow memory also remain open. Research and paper state
-remain isolated from production review, budget and notification state. The included generator
-creates synthetic verification streams; it does not establish strategy accuracy or profitability.
+research and paper reads and a connected synthetic paper command. Closeout corrected the reviewed
+clock-conflict, coverage, paper-holdout and terminal/progress failures, then completed shared policy,
+derived-state resume and bounded whole-workflow processing. Research and paper state remain isolated
+from production review, budget and notification state. The included generator creates synthetic
+verification streams; it does not establish strategy accuracy or profitability.
 
 ```powershell
 .\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase5-fixtures

@@ -14,6 +14,8 @@ The project uses four-part release versions for shipped milestones.
   derives simulated outcomes from later normalized observations for all six Gold/BTC engines.
 - Add additive Phase 6 dispatch evidence migration, versioned research outcomes, consumed-prefix
   paper progress and central holdout-aware read projections.
+- Add one shared clock-injected production/research application policy, durable derived-workflow
+  checkpoints and bounded 500-event public research/paper processing.
 
 ### Fixed
 
@@ -26,14 +28,18 @@ The project uses four-part release versions for shipped milestones.
   consumed-file replacement before success.
 - Withhold protected and boundary-crossing holdout outcomes from ordinary authenticated reads until
   the explicit final-evaluation access record exists.
+- Close P6-01 through P6-05: align book authorization with event-time freshness, reject conflicting
+  availability clocks, enforce complete pre-entry coverage, protect paper-derived holdout data and
+  persist unavailable/expired arms with truthful resumable progress.
 
 ### Evidence and safety
 
 - Verification uses zero-network `SYNTHETIC_FIXTURE` streams, archived fake provider rows and fake
   notification transports. Connected paper results are `SIMULATED_PROSPECTIVE`, not elapsed forward
   observation or empirical performance.
-- Full production-worker/shared-service parity, complete derived-workflow checkpoint/resume, licensed
-  data, genuine provider access, destination Windows recovery and external soaks remain unverified.
+- Shared-policy parity, complete derived-workflow checkpoint/resume and bounded public processing
+  are verified offline. Licensed data, genuine provider access, destination Windows recovery and
+  external soaks remain unverified.
 - Live ingestion, AI, alerts and paper collection stay disabled by default. Orders remain absent and
   `TRADING_ENABLED=true` remains refused.
 
