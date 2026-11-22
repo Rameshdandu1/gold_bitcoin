@@ -148,8 +148,10 @@ The reviewed baseline reproduced as 251 passing tests. The final local suite pas
 one non-failing Starlette/httpx deprecation warning. The corrective suite adds exact public
 counterexamples, conflict/recovery controls, bearish/benign lifecycle controls and both history
 lengths. Ruff lint, Ruff format check, compilation and `git diff --check` passed. `npm ci`, frontend
-TypeScript and the Vite production build passed. Feature-branch Windows CI is recorded in the pull
-request; destination Windows Server validation is still pending.
+TypeScript and the Vite production build passed. GitHub Actions Windows CI
+[run 44993204955](https://github.com/Rameshdandu1/gold_bitcoin/actions/runs/44993204955) passed both
+the backend and frontend jobs on pull-request head `bccc999395a70520268b78d537bd460e32300a27`.
+Destination Windows Server validation is still pending.
 
 External action observations during this work: zero paid provider calls, zero live collection,
 zero real notifications and zero orders. This was verified by using only generated manifests,
