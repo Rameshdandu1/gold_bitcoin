@@ -190,7 +190,7 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
     config_hash = config.canonical_config_hash()
     holdout_open = store.holdout_is_open(args.experiment_id, config_hash)
     policy_contract = {
-        "schema": "phase6-closeout-paper-v1",
+        "schema": "phase6-workflow-acceptance-paper-v2",
         "processing_delay_ms": args.processing_delay_ms,
         "entry_latency_ms": entry_latency_ms,
         "holdout_state": "OPEN" if holdout_open else "PROTECTED",
@@ -215,58 +215,135 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
         total_events=total_events,
         now=datetime.now(UTC),
     )
-    all_candidates = store.candidates(args.experiment_id)
 
     def partition(candidate) -> str:
         if config.holdout_start_utc is None or candidate.expires_at_utc < config.holdout_start_utc:
             return "DEVELOPMENT"
         return "PROTECTED_OR_CROSSING_HOLDOUT"
 
-    protected = [candidate for candidate in all_candidates if partition(candidate) != "DEVELOPMENT"]
-    candidates = [
-        candidate
-        for candidate in all_candidates
-        if partition(candidate) == "DEVELOPMENT" or holdout_open
-    ]
-    decisions = {
-        (candidate.opportunity_id, candidate.revision_id): store.arm_decisions(
+    maximum_candidate_page = 0
+
+    def candidate_pages():
+        nonlocal maximum_candidate_page
+        candidate_offset = 0
+        while True:
+            candidate_page = store.candidate_page(
+                args.experiment_id, offset=candidate_offset, limit=200
+            )
+            if not candidate_page:
+                return
+            maximum_candidate_page = max(maximum_candidate_page, len(candidate_page))
+            yield from candidate_page
+            candidate_offset += len(candidate_page)
+
+    protected_candidate_count = 0
+    eligible_candidate_count = 0
+    expected_arms = 0
+    initially_resolved_candidates = 0
+    for candidate in candidate_pages():
+        protected_candidate = partition(candidate) != "DEVELOPMENT"
+        if protected_candidate:
+            protected_candidate_count += 1
+        if protected_candidate and not holdout_open:
+            continue
+        eligible_candidate_count += 1
+        candidate_decisions = store.arm_decisions(
             args.experiment_id, candidate.opportunity_id, candidate.revision_id
         )
-        for candidate in candidates
-    }
-    persisted, resolved = ledger.decision_states(run_id)
+        expected_arms += len(candidate_decisions)
+        _, resolved_arms = ledger.candidate_decision_states(
+            run_id, candidate.opportunity_id, candidate.revision_id
+        )
+        if candidate_decisions and all(row.arm in resolved_arms for row in candidate_decisions):
+            initially_resolved_candidates += 1
+
+    candidates = {}
+    decisions = {}
+    persisted: set[tuple[str, str, str]] = set()
+    resolved: set[tuple[str, str, str]] = set()
+    candidate_stream = iter(candidate_pages())
+    pending_candidate = next(candidate_stream, None)
+    maximum_active_candidates = 0
+    retired_candidate_count = initially_resolved_candidates
     maximum_input_batch = 0
     maximum_timeline_batch = 0
     maximum_quotes_per_candidate = 0
+    maximum_quote_page = 0
+    maximum_quotes_materialized_before_filter = 0
+    maximum_source_page = 0
+
+    def activate_candidates(through) -> None:
+        nonlocal pending_candidate, maximum_active_candidates, retired_candidate_count
+        while pending_candidate is not None and pending_candidate.observed_at_utc <= through:
+            candidate = pending_candidate
+            pending_candidate = next(candidate_stream, None)
+            if partition(candidate) != "DEVELOPMENT" and not holdout_open:
+                continue
+            key = (candidate.opportunity_id, candidate.revision_id)
+            candidate_decisions = store.arm_decisions(args.experiment_id, *key)
+            persisted_arms, resolved_arms = ledger.candidate_decision_states(run_id, *key)
+            if candidate_decisions and all(row.arm in resolved_arms for row in candidate_decisions):
+                continue
+            candidates[key] = candidate
+            decisions[key] = candidate_decisions
+            persisted.update((key[0], key[1], arm) for arm in persisted_arms)
+            resolved.update((key[0], key[1], arm) for arm in resolved_arms)
+            maximum_active_candidates = max(maximum_active_candidates, len(candidates))
 
     def attempt_outcomes(at) -> None:
-        nonlocal maximum_quotes_per_candidate
-        for candidate in candidates:
-            source_rows = tuple(
-                (row.available_at_utc, str(row.payload["state"]))
-                for row in store.observation_page(
-                    args.experiment_id,
-                    offset=0,
-                    limit=10_000,
-                    kind="SOURCE_TRANSITION",
-                    through_utc=at,
+        nonlocal maximum_quotes_per_candidate, maximum_quote_page, maximum_source_page
+        nonlocal maximum_quotes_materialized_before_filter
+        nonlocal retired_candidate_count
+        for candidate in tuple(candidates.values()):
+            key = (candidate.opportunity_id, candidate.revision_id)
+            unresolved = [
+                arm
+                for arm in decisions[key]
+                if (
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    arm.arm,
                 )
-                if row.symbol == candidate.symbol
-            )
-            quotes = [
-                quote
-                for quote in store.quotes(
-                    args.experiment_id,
-                    candidate.symbol,
-                    opportunity_id=candidate.opportunity_id,
+                in persisted
+                and (
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    arm.arm,
                 )
-                if (quote.available_at_utc or quote.observed_at_utc) <= at
+                not in resolved
             ]
+            if not unresolved or at < candidate.observed_at_utc:
+                continue
+            through = min(at, candidate.expires_at_utc)
+            source_rows, source_page = store.source_transition_window(
+                args.experiment_id,
+                candidate.symbol,
+                start_utc=candidate.observed_at_utc,
+                end_utc=through,
+            )
+            quotes, quote_page, quotes_scanned = store.quote_window(
+                args.experiment_id,
+                candidate.symbol,
+                start_utc=candidate.observed_at_utc,
+                end_utc=through,
+                opportunity_id=candidate.opportunity_id,
+            )
+            maximum_quote_page = max(maximum_quote_page, quote_page)
+            maximum_quotes_materialized_before_filter = max(
+                maximum_quotes_materialized_before_filter, quotes_scanned
+            )
+            maximum_source_page = max(maximum_source_page, source_page)
             maximum_quotes_per_candidate = max(maximum_quotes_per_candidate, len(quotes))
-            for arm in decisions[(candidate.opportunity_id, candidate.revision_id)]:
+            lifecycle_events = tuple(
+                store.lifecycle_events(
+                    args.experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    through_utc=through,
+                )
+            )
+            for arm in unresolved:
                 identity = (candidate.opportunity_id, candidate.revision_id, arm.arm)
-                if identity not in persisted or identity in resolved:
-                    continue
                 outcome = evaluate_quotes(
                     candidate,
                     arm,
@@ -281,6 +358,7 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                     target_index=config.target_index,
                     entry_latency_ms=entry_latency_ms,
                     source_transitions=source_rows,
+                    lifecycle_events=lifecycle_events,
                     evaluated_through_utc=at,
                 ).model_copy(update={"market_data_mode": manifest.data_mode})
                 terminal = outcome.code in {
@@ -303,6 +381,24 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                     ),
                 )
                 resolved.add(identity)
+        retired = []
+        for candidate in tuple(candidates.values()):
+            key = (candidate.opportunity_id, candidate.revision_id)
+            candidate_arms = decisions[key]
+            if all(
+                (candidate.opportunity_id, candidate.revision_id, arm.arm) in resolved
+                for arm in candidate_arms
+            ):
+                retired.append(candidate)
+        for candidate in retired:
+            key = (candidate.opportunity_id, candidate.revision_id)
+            candidates.pop(key, None)
+            decisions.pop(key, None)
+            for identity in tuple(persisted):
+                if identity[:2] == key:
+                    persisted.discard(identity)
+                    resolved.discard(identity)
+            retired_candidate_count += 1
 
     consumed = int(run["consumed_events"])
     invocation_budget = args.maximum_events
@@ -317,13 +413,15 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
             raise ValueError("Frozen paper input ended before its recorded event count")
         maximum_input_batch = max(maximum_input_batch, len(observations))
         horizon = observations[-1].available_at_utc
+        activate_candidates(horizon)
         timeline: list[tuple[datetime, int, str, object]] = [
             (row.available_at_utc, 0, row.observation_id, row)
             for row in observations
             if row.kind == "SOURCE_TRANSITION"
         ]
-        for candidate in candidates:
-            for arm in decisions[(candidate.opportunity_id, candidate.revision_id)]:
+        for candidate in tuple(candidates.values()):
+            key = (candidate.opportunity_id, candidate.revision_id)
+            for arm in decisions[key]:
                 identity = (candidate.opportunity_id, candidate.revision_id, arm.arm)
                 persist_at = arm.ready_at_utc + processing_delay
                 if identity not in persisted and persist_at <= horizon:
@@ -384,8 +482,12 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
             now=datetime.now(UTC),
         )
     summary = ledger.summary(experiment_id=args.experiment_id, include_protected=holdout_open)
-    expected_arms = sum(len(rows) for rows in decisions.values())
-    if protected and not holdout_open and not candidates and consumed == total_events:
+    if (
+        protected_candidate_count
+        and not holdout_open
+        and eligible_candidate_count == 0
+        and consumed == total_events
+    ):
         paper_status = "HOLDOUT_PROTECTED"
     elif consumed < total_events:
         paper_status = (
@@ -412,7 +514,7 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                 "input_complete": consumed == total_events,
                 "expected_terminal_arms": expected_arms,
                 "pending_terminal_arms": max(expected_arms - summary["outcomes"], 0),
-                "protected_candidates": len(protected),
+                "protected_candidates": protected_candidate_count,
                 "holdout_state": "OPEN" if holdout_open else "PROTECTED",
                 "processing_delay_ms": args.processing_delay_ms,
                 "entry_latency_ms": entry_latency_ms,
@@ -421,7 +523,18 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                     "maximum_input_batch": maximum_input_batch,
                     "maximum_timeline_batch": maximum_timeline_batch,
                     "active_candidate_count": len(candidates),
+                    "maximum_active_candidates": maximum_active_candidates,
+                    "retired_candidate_count": retired_candidate_count,
+                    "candidate_page_limit": 200,
+                    "maximum_candidate_page": maximum_candidate_page,
                     "maximum_quotes_per_candidate": maximum_quotes_per_candidate,
+                    "quote_page_limit": 500,
+                    "maximum_quote_page": maximum_quote_page,
+                    "maximum_quotes_materialized_before_filter": (
+                        maximum_quotes_materialized_before_filter
+                    ),
+                    "source_page_limit": 500,
+                    "maximum_source_page": maximum_source_page,
                 },
             },
             sort_keys=True,

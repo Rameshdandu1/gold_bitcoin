@@ -17,7 +17,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from marketintel.application_policy import ApplicationPolicyInput, evaluate_application_policy
+from marketintel.application_policy import (
+    ApplicationPolicyInput,
+    current_target_feasible,
+    evaluate_application_policy,
+    executed_stop_breached,
+)
 from marketintel.models import (
     BookFeatures,
     Candle,
@@ -39,6 +44,7 @@ from marketintel.research_models import (
     OpportunityRecord,
     ReplayObservation,
     ResearchCandidate,
+    ResearchLifecycleEvent,
 )
 from marketintel.research_storage import ResearchStore
 
@@ -177,7 +183,7 @@ class SharedResearchEngine:
         self.provider_completions: dict[tuple[str, str, str], ProviderCompletion] = {}
         self.source_states: dict[str, SourceTransition] = {}
         self.source_history: dict[str, deque[tuple[datetime, SourceTransition]]] = defaultdict(
-            lambda: deque(maxlen=10_000)
+            lambda: deque(maxlen=1)
         )
         self.dirty_symbols: set[str] = set()
         self.maximum_trade_state = 0
@@ -369,7 +375,7 @@ class SharedResearchEngine:
     def checkpoint_state(self) -> dict:
         """Return the complete bounded scientific state needed for a true resume."""
         return {
-            "schema": "phase6-closeout-derived-state-v1",
+            "schema": "phase6-workflow-acceptance-derived-state-v2",
             "instruments": {
                 key: value.model_dump(mode="json") for key, value in self.instruments.items()
             },
@@ -406,8 +412,11 @@ class SharedResearchEngine:
 
     @classmethod
     def from_checkpoint(cls, manifest: DatasetManifest, payload: dict) -> SharedResearchEngine:
-        if payload.get("schema") != "phase6-closeout-derived-state-v1":
-            raise ValueError("Unsupported derived workflow checkpoint schema")
+        if payload.get("schema") != "phase6-workflow-acceptance-derived-state-v2":
+            raise ValueError(
+                "Unsupported derived workflow checkpoint schema; rebuild this isolated "
+                "research experiment under the workflow-acceptance contract"
+            )
         state = cls(manifest)
         state.instruments = {
             key: Instrument.model_validate(value)
@@ -512,6 +521,151 @@ def _provider_decision(
     )
 
 
+def _apply_market_gate(
+    decision: ArmDecision,
+    candidate: ResearchCandidate,
+    config: ExperimentConfig,
+    *,
+    source_history: tuple[tuple[datetime, SourceTransition], ...] = (),
+    book: BookFeatures | None = None,
+    lifecycle_events: tuple[ResearchLifecycleEvent, ...] = (),
+    latest_trade_at_utc: datetime | None = None,
+    revision_current: bool = True,
+) -> ArmDecision:
+    """Freeze the application verdict at this decision's own evidence boundary."""
+    if decision.state != "APPROVED":
+        return decision
+    visible_sources = [row for row in source_history if row[0] <= decision.ready_at_utc]
+    visible_lifecycle = [
+        row for row in lifecycle_events if row.available_at_utc <= decision.ready_at_utc
+    ]
+    terminal = visible_lifecycle[-1] if visible_lifecycle else None
+    engine_config = next(row for row in QUANT_ENGINE_CONFIGS if row.engine == candidate.engine)
+    book_age = (
+        (decision.ready_at_utc - book.observed_at_utc).total_seconds()
+        if book is not None and book.observed_at_utc is not None
+        else None
+    )
+    book_current = bool(
+        book is not None
+        and book.available
+        and book_age is not None
+        and 0 <= book_age <= engine_config.book_max_age_seconds
+    )
+    trade_current = bool(
+        latest_trade_at_utc is None
+        or 0
+        <= (decision.ready_at_utc - latest_trade_at_utc).total_seconds()
+        <= engine_config.stale_after_seconds
+    )
+    sources_current = (
+        (not visible_sources or visible_sources[-1][1].state == "AVAILABLE")
+        and book_current
+        and trade_current
+    )
+    bid = book.best_bid if book is not None and book.available else None
+    ask = book.best_ask if book is not None and book.available else None
+    market_price = bid if candidate.direction == "BULLISH" else ask
+    book_stop_breached = bool(
+        market_price is not None
+        and executed_stop_breached(candidate.direction, candidate.invalidation, market_price)
+    )
+    stop_breached = (
+        bool(
+            terminal is not None
+            and terminal.to_state == "INVALIDATED"
+            and terminal.price_source == "EXECUTED_TRADE"
+        )
+        or book_stop_breached
+    )
+    verdict = evaluate_application_policy(
+        ApplicationPolicyInput(
+            revision_current=revision_current,
+            lifecycle_state=terminal.to_state if terminal is not None else "CANDIDATE",
+            observed_at_utc=candidate.observed_at_utc,
+            expires_at_utc=candidate.expires_at_utc,
+            evaluated_at_utc=decision.ready_at_utc,
+            market_observed_at_utc=(
+                book.observed_at_utc
+                if book is not None and book.observed_at_utc is not None
+                else candidate.observed_at_utc
+            ),
+            sources_current=sources_current,
+            event_order_ambiguous=False,
+            stop_breached=stop_breached,
+            direction=candidate.direction,
+            entry=candidate.entry,
+            invalidation=candidate.invalidation,
+            best_bid=bid,
+            best_ask=ask,
+            maximum_spread_bps=config.maximum_spread_bps,
+            maximum_entry_drift_bps=config.maximum_entry_drift_bps,
+        )
+    )
+    target = candidate.targets[config.target_index - 1]
+    target_feasible = bool(
+        bid is not None
+        and ask is not None
+        and current_target_feasible(
+            direction=candidate.direction,
+            invalidation=candidate.invalidation,
+            target=target,
+            best_bid=bid,
+            best_ask=ask,
+            fee_bps=config.cost_policy.fee_bps_per_side,
+            slippage_bps=config.cost_policy.slippage_bps_per_side,
+            minimum_net_reward_risk=engine_config.min_reward_risk,
+        )
+    )
+    if verdict.eligible and target_feasible:
+        return decision
+    return decision.model_copy(
+        update={
+            "state": "WAIT",
+            "reason": (
+                "Shared application policy blocked provider-ready entry: "
+                + (
+                    "TARGET_EXHAUSTED_OR_NET_REWARD_RISK"
+                    if verdict.eligible and not target_feasible
+                    else ",".join(verdict.failed_codes)
+                )
+            ),
+        }
+    )
+
+
+def _dual_decision(gpt: ArmDecision, claude: ArmDecision) -> ArmDecision:
+    """Combine the two persisted individual decisions without recreating either one."""
+    ready = max(gpt.ready_at_utc, claude.ready_at_utc)
+    if "UNAVAILABLE" in {gpt.state, claude.state}:
+        state = "UNAVAILABLE"
+        reason = "Both matching contemporary provider assessments were not available"
+    elif "REJECTED" in {gpt.state, claude.state}:
+        state = "REJECTED"
+        reason = "At least one independent provider rejected the frozen target"
+    elif "WAIT" in {gpt.state, claude.state}:
+        state = "WAIT"
+        reason = (
+            "At least one independent provider returned WAIT: "
+            f"GPT={gpt.reason}; CLAUDE={claude.reason}"
+        )
+    else:
+        state = "APPROVED"
+        reason = "Both independent archived assessments approved the frozen target"
+    return ArmDecision(
+        arm="RULES_PLUS_DUAL",
+        state=state,
+        ready_at_utc=ready,
+        reason=reason,
+        provider_latency_ms=max(gpt.provider_latency_ms, claude.provider_latency_ms),
+        attributable_cost_microusd=(
+            gpt.attributable_cost_microusd + claude.attributable_cost_microusd
+        ),
+        evidence_mode=(gpt.evidence_mode if gpt.evidence_mode == claude.evidence_mode else None),
+        provider="DUAL",
+    )
+
+
 def _decisions(
     candidate: ResearchCandidate,
     config: ExperimentConfig,
@@ -540,90 +694,14 @@ def _decisions(
         "RULES_PLUS_CLAUDE",
     )
 
-    def apply_source_gate(decision: ArmDecision) -> ArmDecision:
-        visible = [row for row in source_history if row[0] <= decision.ready_at_utc]
-        if decision.state != "APPROVED":
-            return decision
-        sources_current = not visible or visible[-1][1].state == "AVAILABLE"
-        bid = book.best_bid if book is not None and book.available else None
-        ask = book.best_ask if book is not None and book.available else None
-        stop_breached = bool(
-            bid is not None
-            and ask is not None
-            and (
-                bid <= candidate.invalidation
-                if candidate.direction == "BULLISH"
-                else ask >= candidate.invalidation
-            )
-        )
-        verdict = evaluate_application_policy(
-            ApplicationPolicyInput(
-                revision_current=True,
-                lifecycle_state="CANDIDATE",
-                observed_at_utc=candidate.observed_at_utc,
-                expires_at_utc=candidate.expires_at_utc,
-                evaluated_at_utc=decision.ready_at_utc,
-                market_observed_at_utc=(
-                    book.observed_at_utc
-                    if book is not None and book.observed_at_utc is not None
-                    else candidate.observed_at_utc
-                ),
-                sources_current=sources_current and book is not None and book.available,
-                event_order_ambiguous=False,
-                stop_breached=stop_breached,
-                direction=candidate.direction,
-                entry=candidate.entry,
-                invalidation=candidate.invalidation,
-                best_bid=bid,
-                best_ask=ask,
-                maximum_spread_bps=config.maximum_spread_bps,
-                maximum_entry_drift_bps=config.maximum_entry_drift_bps,
-            )
-        )
-        target = candidate.targets[config.target_index - 1]
-        target_exhausted = bool(
-            bid is not None
-            and ask is not None
-            and (bid >= target if candidate.direction == "BULLISH" else ask <= target)
-        )
-        if verdict.eligible and not target_exhausted:
-            return decision
-        return decision.model_copy(
-            update={
-                "state": "WAIT",
-                "reason": (
-                    "Shared application policy blocked provider-ready entry: "
-                    + ("TARGET_EXHAUSTED" if target_exhausted else ",".join(verdict.failed_codes))
-                ),
-            }
-        )
-
-    gpt = apply_source_gate(gpt)
-    claude = apply_source_gate(claude)
-    ready = max(gpt.ready_at_utc, claude.ready_at_utc)
-    if "UNAVAILABLE" in {gpt.state, claude.state}:
-        state = "UNAVAILABLE"
-        reason = "Both matching contemporary provider assessments were not available"
-    elif "REJECTED" in {gpt.state, claude.state}:
-        state = "REJECTED"
-        reason = "At least one independent provider rejected the frozen target"
-    elif "WAIT" in {gpt.state, claude.state}:
-        state = "WAIT"
-        reason = "At least one independent provider returned WAIT"
-    else:
-        state = "APPROVED"
-        reason = "Both independent archived assessments approved the frozen target"
-    dual = ArmDecision(
-        arm="RULES_PLUS_DUAL",
-        state=state,
-        ready_at_utc=ready,
-        reason=reason,
-        provider_latency_ms=max(gpt.provider_latency_ms, claude.provider_latency_ms),
-        attributable_cost_microusd=(
-            gpt.attributable_cost_microusd + claude.attributable_cost_microusd
-        ),
-        evidence_mode=(gpt.evidence_mode if gpt.evidence_mode == claude.evidence_mode else None),
-        provider="DUAL",
+    gpt = _apply_market_gate(gpt, candidate, config, source_history=source_history, book=book)
+    claude = _apply_market_gate(claude, candidate, config, source_history=source_history, book=book)
+    dual = _apply_market_gate(
+        _dual_decision(gpt, claude),
+        candidate,
+        config,
+        source_history=source_history,
+        book=book,
     )
     return rules, gpt, claude, dual
 
@@ -682,13 +760,34 @@ def run_shared_workflow(
     )
     cadence = timedelta(seconds=config.evaluation_cadence_seconds)
     journal_batch: list[ReplayObservation] = []
-    seen = {(row.opportunity_id, row.revision_id) for row in store.candidates(config.experiment_id)}
     generated = int(checkpoint["generated_candidates"]) if checkpoint is not None else 0
     evaluations = int(checkpoint["engine_evaluations"]) if checkpoint is not None else 0
     start_offset = int(checkpoint["input_offset"]) if checkpoint is not None else 0
     observations_count = start_offset
     processed_this_run = 0
     expected_observations = sum(row.record_count for row in manifest.files)
+
+    def candidate_pages() -> Iterable[ResearchCandidate]:
+        offset = 0
+        while True:
+            page = store.candidate_page(config.experiment_id, offset=offset, limit=200)
+            if not page:
+                return
+            yield from page
+            offset += len(page)
+
+    active_candidates: dict[tuple[str, str], ResearchCandidate] = {}
+    active_offset = 0
+    while True:
+        active_page = store.active_candidate_page(
+            config.experiment_id, offset=active_offset, limit=200
+        )
+        if not active_page:
+            break
+        for candidate in active_page:
+            active_candidates[(candidate.opportunity_id, candidate.revision_id)] = candidate
+        active_offset += len(active_page)
+    maximum_active_candidates = len(active_candidates)
 
     def save_checkpoint(status: str) -> None:
         store.save_workflow_checkpoint(
@@ -712,15 +811,7 @@ def run_shared_workflow(
         )
 
     def persist_available_provider_decisions(at: datetime) -> None:
-        for candidate in store.candidates(config.experiment_id):
-            rows = _decisions(
-                candidate,
-                config,
-                state.provider_completions,
-                manifest.data_mode,
-                tuple(state.source_history[candidate.symbol]),
-                state.books.get(candidate.symbol),
-            )
+        for candidate in candidate_pages():
             keys = {
                 "RULES_PLUS_GPT": (candidate.opportunity_id, candidate.revision_id, "GPT"),
                 "RULES_PLUS_CLAUDE": (
@@ -729,16 +820,50 @@ def run_shared_workflow(
                     "CLAUDE",
                 ),
             }
-            for decision in rows[1:]:
-                required = (
-                    tuple(keys.values())
-                    if decision.arm == "RULES_PLUS_DUAL"
-                    else (keys[decision.arm],)
+            existing = {
+                row.arm: row
+                for row in store.arm_decisions(
+                    config.experiment_id, candidate.opportunity_id, candidate.revision_id
                 )
-                if not all(key in state.provider_completions for key in required):
+            }
+            lifecycle = tuple(
+                store.lifecycle_events(
+                    config.experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    through_utc=at,
+                )
+            )
+            latest_trade_at = max(
+                (row.received_at_utc for row in state.trades[candidate.symbol]),
+                default=None,
+            )
+            for arm, key in keys.items():
+                if arm in existing or key not in state.provider_completions:
                     continue
+                decision = _provider_decision(
+                    candidate,
+                    config,
+                    state.provider_completions[key],
+                    arm,
+                )
                 if decision.ready_at_utc > at:
                     continue
+                decision = _apply_market_gate(
+                    decision,
+                    candidate,
+                    config,
+                    source_history=tuple(state.source_history[candidate.symbol]),
+                    book=state.books.get(candidate.symbol),
+                    lifecycle_events=lifecycle,
+                    latest_trade_at_utc=latest_trade_at,
+                    revision_current=store.candidate_revision_is_current(
+                        config.experiment_id,
+                        candidate.opportunity_id,
+                        candidate.revision_id,
+                        at_utc=decision.ready_at_utc,
+                    ),
+                )
                 store.save_arm_decision(
                     config.experiment_id,
                     candidate.opportunity_id,
@@ -746,9 +871,107 @@ def run_shared_workflow(
                     decision,
                     persisted_at=at,
                 )
+                existing[decision.arm] = decision
+            if "RULES_PLUS_DUAL" in existing or not all(
+                arm in existing for arm in ("RULES_PLUS_GPT", "RULES_PLUS_CLAUDE")
+            ):
+                continue
+            dual = _apply_market_gate(
+                _dual_decision(existing["RULES_PLUS_GPT"], existing["RULES_PLUS_CLAUDE"]),
+                candidate,
+                config,
+                source_history=tuple(state.source_history[candidate.symbol]),
+                book=state.books.get(candidate.symbol),
+                lifecycle_events=lifecycle,
+                latest_trade_at_utc=latest_trade_at,
+                revision_current=store.candidate_revision_is_current(
+                    config.experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    at_utc=max(
+                        existing["RULES_PLUS_GPT"].ready_at_utc,
+                        existing["RULES_PLUS_CLAUDE"].ready_at_utc,
+                    ),
+                ),
+            )
+            if dual.ready_at_utc <= at:
+                store.save_arm_decision(
+                    config.experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    dual,
+                    persisted_at=at,
+                )
+
+    def persist_terminal_facts(row: ReplayObservation) -> None:
+        if row.kind not in {"TRADE", "SOURCE_TRANSITION"}:
+            return
+        trade = TradeRecord.model_validate(row.payload) if row.kind == "TRADE" else None
+        transition = (
+            SourceTransition.model_validate(row.payload)
+            if row.kind == "SOURCE_TRANSITION"
+            else None
+        )
+        for candidate in tuple(active_candidates.values()):
+            if candidate.symbol != row.symbol or candidate.observed_at_utc > row.available_at_utc:
+                continue
+            reason = None
+            price_source: Literal["EXECUTED_TRADE", "SOURCE_STATE"]
+            price = None
+            if trade is not None and executed_stop_breached(
+                candidate.direction, candidate.invalidation, trade.price
+            ):
+                reason = "EXECUTED_STOP_BREACH"
+                price_source = "EXECUTED_TRADE"
+                price = trade.price
+            elif transition is not None and transition.state != "AVAILABLE":
+                reason = f"SOURCE_{transition.state}:{transition.reason}"
+                price_source = "SOURCE_STATE"
+            else:
+                continue
+            store.save_lifecycle_event(
+                config.experiment_id,
+                ResearchLifecycleEvent(
+                    opportunity_id=candidate.opportunity_id,
+                    revision_id=candidate.revision_id,
+                    event_id=hashlib.sha256(
+                        f"{candidate.opportunity_id}|{candidate.revision_id}|{row.observation_id}|{reason}".encode()
+                    ).hexdigest(),
+                    to_state="INVALIDATED",
+                    occurred_at_utc=row.available_at_utc,
+                    available_at_utc=row.available_at_utc,
+                    reason=reason,
+                    price_source=price_source,
+                    source_event_id=row.observation_id,
+                    price=price,
+                ),
+            )
+            active_candidates.pop((candidate.opportunity_id, candidate.revision_id), None)
+
+    def persist_clock_terminal_facts(at: datetime) -> None:
+        for candidate in tuple(active_candidates.values()):
+            if candidate.expires_at_utc > at:
+                continue
+            store.save_lifecycle_event(
+                config.experiment_id,
+                ResearchLifecycleEvent(
+                    opportunity_id=candidate.opportunity_id,
+                    revision_id=candidate.revision_id,
+                    event_id=hashlib.sha256(
+                        f"{candidate.opportunity_id}|{candidate.revision_id}|EXPIRY".encode()
+                    ).hexdigest(),
+                    to_state="EXPIRED",
+                    occurred_at_utc=candidate.expires_at_utc,
+                    available_at_utc=candidate.expires_at_utc,
+                    reason="CANDIDATE_EXPIRY_REACHED",
+                    price_source="CLOCK",
+                ),
+            )
+            active_candidates.pop((candidate.opportunity_id, candidate.revision_id), None)
 
     def evaluate(at: datetime) -> None:
-        nonlocal generated, evaluations
+        nonlocal generated, evaluations, maximum_active_candidates
+        persist_clock_terminal_facts(at)
         for result, instrument in state.evaluate(at):
             store.save_engine_evaluation(
                 config.experiment_id,
@@ -760,14 +983,15 @@ def run_shared_workflow(
             if result.candidate is None:
                 continue
             candidate = to_research_candidate(result.candidate, instrument)
-            identity = (candidate.opportunity_id, candidate.revision_id)
-            if identity in seen:
-                continue
-            store.save_candidate(
+            created = store.save_candidate(
                 config.experiment_id,
                 candidate,
                 persisted_at=at,
             )
+            if not created:
+                continue
+            active_candidates[(candidate.opportunity_id, candidate.revision_id)] = candidate
+            maximum_active_candidates = max(maximum_active_candidates, len(active_candidates))
             rules = _decisions(
                 candidate,
                 config,
@@ -782,7 +1006,6 @@ def run_shared_workflow(
                 rules,
                 persisted_at=at,
             )
-            seen.add(identity)
             generated += 1
 
     for input_index, row in enumerate(ordered, start=1):
@@ -801,6 +1024,7 @@ def run_shared_workflow(
                 evaluate(next_evaluation)
                 next_evaluation += cadence
             state.apply(row)
+            persist_terminal_facts(row)
             if row.kind in {"PROVIDER_COMPLETION", "SOURCE_TRANSITION"}:
                 persist_available_provider_decisions(row.available_at_utc)
         journal_batch.append(row)
@@ -829,7 +1053,11 @@ def run_shared_workflow(
             "observations_remaining": max(expected_observations - observations_count, 0),
             "opportunities_generated": generated,
             "engine_evaluations": evaluations,
-            "memory": state.memory_evidence(),
+            "memory": {
+                **state.memory_evidence(),
+                "maximum_active_candidates": maximum_active_candidates,
+                "active_candidates_at_checkpoint": len(active_candidates),
+            },
             "external_calls": 0,
             "real_notifications": 0,
             "orders": 0,
@@ -839,17 +1067,30 @@ def run_shared_workflow(
         evaluate(next_evaluation)
         next_evaluation += cadence
 
-    records: list[OpportunityRecord] = []
-    for candidate in store.candidates(config.experiment_id):
-        decisions = _decisions(
-            candidate,
-            config,
-            state.provider_completions,
-            manifest.data_mode,
-            tuple(state.source_history[candidate.symbol]),
-            state.books.get(candidate.symbol),
-        )
-        for decision in decisions:
+    persist_available_provider_decisions(config.evaluation_end_utc)
+    records_count = 0
+    maximum_quote_page = 0
+    maximum_quotes_materialized_before_filter = 0
+    maximum_quotes_per_candidate = 0
+    maximum_source_page = 0
+    maximum_source_rows_per_candidate = 0
+    for candidate in candidate_pages():
+        decisions_by_arm = {
+            row.arm: row
+            for row in store.arm_decisions(
+                config.experiment_id, candidate.opportunity_id, candidate.revision_id
+            )
+        }
+        for arm, provider in (
+            ("RULES_PLUS_GPT", "GPT"),
+            ("RULES_PLUS_CLAUDE", "CLAUDE"),
+        ):
+            if arm in decisions_by_arm:
+                continue
+            completion = state.provider_completions.get(
+                (candidate.opportunity_id, candidate.revision_id, provider)
+            )
+            decision = _provider_decision(candidate, config, completion, arm)
             store.save_arm_decision(
                 config.experiment_id,
                 candidate.opportunity_id,
@@ -857,12 +1098,47 @@ def run_shared_workflow(
                 decision,
                 persisted_at=max(candidate.observed_at_utc, decision.ready_at_utc),
             )
+            decisions_by_arm[arm] = decision
+        if "RULES_PLUS_DUAL" not in decisions_by_arm:
+            decision = _dual_decision(
+                decisions_by_arm["RULES_PLUS_GPT"],
+                decisions_by_arm["RULES_PLUS_CLAUDE"],
+            )
+            store.save_arm_decision(
+                config.experiment_id,
+                candidate.opportunity_id,
+                candidate.revision_id,
+                decision,
+                persisted_at=max(candidate.observed_at_utc, decision.ready_at_utc),
+            )
+            decisions_by_arm[decision.arm] = decision
+        decisions = tuple(decisions_by_arm[arm] for arm in RESEARCH_ARMS)
         version = state.instrument_versions[candidate.symbol]
-        quotes = store.quotes(
+        quotes, quote_page, quotes_scanned = store.quote_window(
             config.experiment_id,
             candidate.symbol,
+            start_utc=candidate.observed_at_utc,
+            end_utc=candidate.expires_at_utc,
             opportunity_id=candidate.opportunity_id,
         )
+        maximum_quote_page = max(maximum_quote_page, quote_page)
+        maximum_quotes_materialized_before_filter = max(
+            maximum_quotes_materialized_before_filter, quotes_scanned
+        )
+        maximum_quotes_per_candidate = max(maximum_quotes_per_candidate, len(quotes))
+        lifecycle_events = tuple(
+            store.lifecycle_events(
+                config.experiment_id, candidate.opportunity_id, candidate.revision_id
+            )
+        )
+        source_rows, source_page = store.source_transition_window(
+            config.experiment_id,
+            candidate.symbol,
+            start_utc=candidate.observed_at_utc,
+            end_utc=candidate.expires_at_utc,
+        )
+        maximum_source_page = max(maximum_source_page, source_page)
+        maximum_source_rows_per_candidate = max(maximum_source_rows_per_candidate, len(source_rows))
         arm_rows = []
         label_end = candidate.observed_at_utc
         for decision in decisions:
@@ -874,7 +1150,8 @@ def run_shared_workflow(
                 config.cost_policy,
                 target_index=config.target_index,
                 entry_latency_ms=config.entry_latency_ms,
-                source_transitions=tuple(state.source_history[candidate.symbol]),
+                source_transitions=source_rows,
+                lifecycle_events=lifecycle_events,
             )
             outcome = outcome.model_copy(update={"market_data_mode": manifest.data_mode})
             store.save_outcome(
@@ -914,7 +1191,7 @@ def run_shared_workflow(
             arms=tuple(arm_rows),
         )
         store.save_opportunity(config.experiment_id, record)
-        records.append(record)
+        records_count += 1
     store.record_action_counts(
         config.experiment_id,
         scope="OFFLINE_SHARED_WORKFLOW",
@@ -932,9 +1209,22 @@ def run_shared_workflow(
         "observations": observations_count,
         "engine_evaluations": evaluations,
         "opportunities_generated": generated,
-        "opportunities_total": len(records),
+        "opportunities_total": records_count,
         "engine_matrix": store.engine_matrix(config.experiment_id),
-        "memory": state.memory_evidence(),
+        "memory": {
+            **state.memory_evidence(),
+            "quote_page_limit": 500,
+            "maximum_quote_page": maximum_quote_page,
+            "maximum_quotes_materialized_before_filter": (
+                maximum_quotes_materialized_before_filter
+            ),
+            "maximum_quotes_per_candidate": maximum_quotes_per_candidate,
+            "source_page_limit": 500,
+            "maximum_source_page": maximum_source_page,
+            "maximum_source_rows_per_candidate": maximum_source_rows_per_candidate,
+            "maximum_active_candidates": maximum_active_candidates,
+            "active_candidates_at_completion": len(active_candidates),
+        },
         "arms": list(RESEARCH_ARMS),
         "external_calls": 0,
         "real_notifications": 0,

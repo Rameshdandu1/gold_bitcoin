@@ -17,6 +17,7 @@ from marketintel.research_models import (
     OpportunityRecord,
     PriceBar,
     ResearchCandidate,
+    ResearchLifecycleEvent,
     ResearchOutcome,
 )
 
@@ -113,6 +114,7 @@ def evaluate_quotes(
     target_index: int = 1,
     entry_latency_ms: int = 0,
     source_transitions: Iterable[tuple[datetime, str | object]] = (),
+    lifecycle_events: Iterable[ResearchLifecycleEvent] = (),
     evaluated_through_utc: datetime | None = None,
 ) -> ResearchOutcome:
     """Evaluate against ordered executable quotes using each arm's real ready time."""
@@ -167,6 +169,16 @@ def evaluate_quotes(
         (at, getattr(transition, "state", transition))
         for at, transition in source_transitions
         if candidate.observed_at_utc <= at <= candidate.expires_at_utc
+    )
+    executed_breaches = sorted(
+        (
+            row
+            for row in lifecycle_events
+            if row.to_state == "INVALIDATED"
+            and row.price_source == "EXECUTED_TRADE"
+            and candidate.observed_at_utc <= row.available_at_utc <= candidate.expires_at_utc
+        ),
+        key=lambda row: (row.available_at_utc, row.event_id),
     )
 
     def source_interrupted(through: datetime) -> bool:
@@ -236,6 +248,23 @@ def evaluate_quotes(
         )
     first = entry_quotes[0]
     first_at = _quote_available_at(first)
+    pre_entry_breach = next(
+        (row for row in executed_breaches if row.available_at_utc <= first_at), None
+    )
+    if pre_entry_breach is not None:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "NO_ENTRY",
+            "EXECUTED_STOP_BREACH_BEFORE_ENTRY",
+            events=tuple(
+                value
+                for value in (pre_entry_breach.source_event_id, pre_entry_breach.event_id)
+                if value is not None
+            ),
+            complete=True,
+        )
     if source_interrupted(first_at):
         return _outcome(
             candidate,
@@ -299,6 +328,52 @@ def evaluate_quotes(
     for quote in relevant:
         quote_at = _quote_available_at(quote)
         previous_at = _quote_available_at(previous)
+        breach = next(
+            (row for row in executed_breaches if first_at < row.available_at_utc <= quote_at),
+            None,
+        )
+        if breach is not None:
+            if breach.available_at_utc == quote_at:
+                return _outcome(
+                    candidate,
+                    decision,
+                    target_index,
+                    "AMBIGUOUS",
+                    "EXECUTED_STOP_AND_QUOTE_ORDER_AMBIGUOUS",
+                    events=tuple(
+                        value
+                        for value in (first.event_id, breach.source_event_id, quote.event_id)
+                        if value is not None
+                    ),
+                    complete=False,
+                    entry_at=first_at,
+                    entry=entry,
+                    favorable_excursion=favorable,
+                    adverse_excursion=adverse,
+                )
+            raw_exit = breach.price or candidate.invalidation
+            exit_fill = _exit_fill(candidate, raw_exit, policy, instrument.tick_size)
+            return _outcome(
+                candidate,
+                decision,
+                target_index,
+                "STOP_BEFORE_TARGET",
+                "EXECUTED_STOP_BREACH_AFTER_ENTRY",
+                events=tuple(
+                    value
+                    for value in (first.event_id, breach.source_event_id, breach.event_id)
+                    if value is not None
+                ),
+                complete=True,
+                entry_at=first_at,
+                exit_at=breach.available_at_utc,
+                entry=entry,
+                exit=exit_fill,
+                policy=policy,
+                instrument=instrument,
+                favorable_excursion=favorable,
+                adverse_excursion=adverse,
+            )
         if source_interrupted(quote_at):
             return _outcome(
                 candidate,
