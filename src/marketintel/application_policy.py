@@ -50,6 +50,33 @@ class ApplicationPolicyVerdict:
         return tuple(row.code for row in self.checks if not row.passed)
 
 
+def executed_stop_breached(
+    direction: Literal["BULLISH", "BEARISH"], invalidation: Decimal, price: Decimal
+) -> bool:
+    """Return the shared executed-price invalidation fact used by every workflow."""
+    return price <= invalidation if direction == "BULLISH" else price >= invalidation
+
+
+def current_target_feasible(
+    *,
+    direction: Literal["BULLISH", "BEARISH"],
+    invalidation: Decimal,
+    target: Decimal,
+    best_bid: Decimal,
+    best_ask: Decimal,
+    fee_bps: Decimal,
+    slippage_bps: Decimal,
+    minimum_net_reward_risk: Decimal,
+) -> bool:
+    """Evaluate the production/research current target economics contract."""
+    quote_entry = best_ask if direction == "BULLISH" else best_bid
+    risk = quote_entry - invalidation if direction == "BULLISH" else invalidation - quote_entry
+    gross = target - quote_entry if direction == "BULLISH" else quote_entry - target
+    costs = quote_entry * (fee_bps + slippage_bps) / Decimal("10000")
+    net = gross - costs
+    return risk > 0 and net > 0 and net / risk >= minimum_net_reward_risk
+
+
 def evaluate_application_policy(value: ApplicationPolicyInput) -> ApplicationPolicyVerdict:
     """Evaluate the common policy using only evidence available at one clock boundary."""
     checks: list[PolicyCheck] = []

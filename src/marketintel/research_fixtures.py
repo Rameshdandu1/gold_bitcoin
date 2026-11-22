@@ -164,10 +164,14 @@ def _bars(config, now: datetime) -> list[Candle]:
     return rows
 
 
-def generate_fixture(asset: str, output: Path) -> tuple[Path, Path]:
+def generate_fixture(
+    asset: str, output: Path, *, historical_quote_count: int = 0
+) -> tuple[Path, Path]:
     asset = asset.upper()
     if asset not in {"GOLD", "BTC"}:
         raise ValueError("Fixture asset must be GOLD or BTC")
+    if historical_quote_count < 0:
+        raise ValueError("Historical quote count cannot be negative")
     output.mkdir(parents=True, exist_ok=True)
     symbol = "XAUTUSD" if asset == "GOLD" else "BTCUSD"
     instrument = _instrument(asset)
@@ -242,6 +246,24 @@ def generate_fixture(asset: str, output: Path) -> tuple[Path, Path]:
                     payload=candle.model_dump(mode="json"),
                 )
             )
+    historical_bid = Decimal("2599.9" if asset == "GOLD" else "69999")
+    historical_ask = Decimal("2600.1" if asset == "GOLD" else "70001")
+    for index in range(historical_quote_count):
+        sequence += 1
+        seconds = index - historical_quote_count
+        at = FIXTURE_NOW + timedelta(seconds=seconds)
+        observations.append(
+            ReplayObservation(
+                observation_id=f"{asset.lower()}-historical-quote-{index:08d}",
+                kind="EXECUTABLE_QUOTE",
+                symbol=symbol,
+                venue="delta_india",
+                exchange_time_utc=at,
+                available_at_utc=at,
+                persistence_sequence=sequence,
+                payload={"bid": str(historical_bid), "ask": str(historical_ask)},
+            )
+        )
     sequence += 1
     observations.append(
         ReplayObservation(
@@ -380,10 +402,11 @@ def generate_fixture(asset: str, output: Path) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m marketintel.research_fixtures")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--historical-quotes", type=int, default=0)
     args = parser.parse_args(argv)
     output = Path(args.output).resolve()
     for asset in ("GOLD", "BTC"):
-        generate_fixture(asset, output)
+        generate_fixture(asset, output, historical_quote_count=args.historical_quotes)
     print(f"Generated explicitly synthetic Gold/BTC fixtures in {output}")
     return 0
 

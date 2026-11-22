@@ -175,14 +175,13 @@ acceptance is qualified by the [independent closeout review](audits/phase-6-clos
   explicit unavailable/expired terminal arms and truthful bounded progress.
 - [x] **Tested resume:** derived warmup/provider checkpoints and fresh-process paper continuation
   match uninterrupted synthetic controls.
-- [ ] **Phase 6 offline acceptance:** P6C-01 contemporaneous decisions through later books,
+- [x] **Phase 6 offline acceptance:** P6C-01 contemporaneous decisions through later books,
   P6C-02 actual application/lifecycle parity and P6C-03 measured whole-workflow memory bounds.
 
-The 251-test baseline and original regressions pass, but shared predicates and 500-event input pages
-do not establish complete application parity or total memory bounds. The independent closeout review
-reproduces three failures within those two existing software gates. Destination Windows recovery,
-licensed live data, genuine provider outputs and elapsed observation remain subsequent operational
-or empirical gates.
+The reviewed 251-test baseline and original regressions remain preserved. The later corrective
+matrix adds unchanged-book, terminal executed-stop, recovery/fault and two-length bounded-resource
+regressions. Destination Windows recovery, licensed live data, genuine provider outputs and elapsed
+observation remain subsequent operational or empirical gates.
 
 ### Phase 6 closeout — fixed remaining software scope
 
@@ -190,15 +189,17 @@ or empirical gates.
   P6-03 anchored quote-gap and incomplete pre-entry OHLC coverage corrections.
 - [x] **Closeout B:** P6-04 holdout protection through paper derivation/reads and P6-05 legal
   missing/expired-provider dispositions plus truthful bounded-progress/completion states.
-- [ ] **Closeout C:** preserve the verified derived-state resume mechanism; correct P6C-01/02 and
-  establish full application parity, then correct P6C-03 and measure whole-workflow bounds.
+- [x] **Closeout C:** preserve the verified derived-state resume mechanism; correct P6C-01/02 and
+  establish the finite application parity matrix, then correct P6C-03 and measure whole-workflow
+  bounds.
 - [x] **Closeout D evidence delivered:** original regression/public-command results, migrations,
   Gold/BTC checksums and Windows CI are recorded. The later independent review qualifies the
-  implementation report's full-acceptance claim; corrective evidence remains required.
+  implementation report's original full-acceptance claim; the later workflow-acceptance report
+  records the corrective evidence and remaining external gates.
 
-The remaining work completes existing requirements and adds no feature-development phase. Reviewed
-main `81f86f79cb943c8cb837aae4f800135948f89f32` passes 251 tests. Preserve that progress, complete
-the finite parity/recovery/resource matrix, then proceed to the next operational stage.
+The remaining work is operational/evidence validation and adds no feature-development phase.
+Reviewed main `81f86f79cb943c8cb837aae4f800135948f89f32` passed 251 tests; the corrective branch preserves
+that progress and completes the finite parity/recovery/resource matrix.
 
 ## Next operational stage — controlled Windows and live integration validation
 
@@ -228,11 +229,12 @@ Duration alone does not establish an edge. Synthetic and retrospective records r
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
 - M3: implemented with a passing fixture baseline; legacy upgrade and original clock cases are
-  corrected, and the closeout verifies authorization freshness and shared predicate checks. Full
-  application parity remains open under P6C-01/02. Live
+  corrected, and the closeout verifies authorization freshness and the finite shared application
+  parity matrix. Live
   provider/model entitlement, paid-call behavior, Slack delivery,
   Windows installation and extended market soak remain separate operator acceptance gates.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
-- M5 offline software acceptance remains open for P6C-01/02/03. The six-engine positive workflow,
-  corrected outcome/holdout contracts and tested paper chronology/recovery pass on immutable
-  hypothetical evidence. M5 empirical readiness still requires real licensed and prospective evidence.
+- M5 offline software acceptance passes the finite P6C-01/02/03 matrix. The six-engine positive
+  workflow, corrected outcome/holdout contracts and tested paper chronology/recovery pass on
+  immutable hypothetical evidence. M5 empirical readiness still requires real licensed and
+  prospective evidence.

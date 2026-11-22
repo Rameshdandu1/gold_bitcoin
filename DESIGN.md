@@ -1,6 +1,6 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: v0.6 implementation / Phase 6 workflow acceptance corrections pending; external validation follows. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: v0.6 implementation / Phase 6 offline workflow acceptance complete; external validation follows. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
@@ -11,9 +11,10 @@ The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) defi
 findings and acceptance gaps. Their offline disposition is recorded in the
 [Phase 6 closeout verification](docs/audits/phase-6-closeout-verification.md). The later
 [independent closeout review](docs/audits/phase-6-closeout-independent-review.md) verifies all five
-exact corrections and tested resume paths, but leaves P6C-01/02 contemporaneous application parity
-and P6C-03 whole-workflow memory open. Routine live operation requires those software corrections
-and the separately documented external validation gates.
+exact corrections and tested resume paths. The later
+[workflow acceptance verification](docs/audits/phase-6-workflow-acceptance-verification.md) records
+the P6C-01/02/03 corrections and bounded two-length resource evidence. Routine live operation still
+requires the separately documented external validation gates.
 
 The alert worker refreshes its clock at each risk attempt and again inside the short dispatch
 authorization transaction. The eligibility token and evaluated trade set use the same receive-time
@@ -32,10 +33,10 @@ expiry, including complete pre-entry intervals.
 The scheduler evaluates every frozen cadence even during input silence. Source transitions are
 applied at their availability time to provider readiness and outcome eligibility. Production
 consensus and connected research reuse clock-injected predicates for revision, lifecycle, expiry,
-source, stop, spread and entry-drift checks. Full application parity is not yet established:
-research supplies constant revision/lifecycle/order facts, omits executed-trade terminal history,
-and can recompute an earlier arm using a later book. The shared service must preserve contemporaneous
-decisions and equivalent factual inputs before that acceptance gate closes.
+source, stop, spread, entry drift and current target economics. Individual provider decisions are
+written once at their own readiness boundary; the dual arm combines those persisted decisions and
+rechecks the later boundary. Executed-trade lifecycle events are additive terminal facts, so price
+recovery cannot reopen a stopped candidate or create a later paper entry.
 
 The connected `paper-workflow` command consumes the stored normalized journal in indexed 500-event
 input batches, writes approved decisions before latency-adjusted eligible entry, and separately persists
@@ -46,11 +47,11 @@ provenance; ordinary API, count and export paths hide protected/crossing outcome
 `final-holdout` records the frozen access identity. Legacy rows lacking provenance are hidden from
 scoped projections.
 
-Input pages do not bound the whole workflow: the current quote projection materializes full symbol
-history before filtering, and candidate/output collections still retain historical records. The
-independent two-length resource measurement leaves this gate open. The corrective task must page
-evidence/output, retain necessary coverage anchors and retire resolved active state without silently
-discarding facts.
+Research and paper query indexed candidate-time quote/source windows in pages. Eligibility is
+checked before evidence is loaded, input and candidate pages have explicit peaks, and completed
+candidate state is retired after durable outcome persistence. The 1,000/8,000-history probes keep
+the same maximum active set (three), quote page (six rows) and candidate outcome set without a
+silent evidence cap.
 
 The local-stream worker commits each event and cursor atomically and binds progress to source
 identity, generation and a consumed-prefix SHA-256.
@@ -76,6 +77,8 @@ clock, bounded trades/candles/books, source history, provider slots and pending 
 Fresh-process resumes skip the committed prefix and reject source/configuration drift. Output writes
 are immutable, so a fault before checkpoint advancement safely replays the current batch. The paper
 bridge uses the same retry-safe pattern and reports warmup, partial, unresolved and complete states.
+Corrected contract versions explicitly refuse an old derived checkpoint rather than mixing old and
+new scientific identities; the lifecycle table/index migration is additive.
 
 Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
 hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,

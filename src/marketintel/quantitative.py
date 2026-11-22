@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 
+from marketintel.application_policy import executed_stop_breached
 from marketintel.features import (
     RESOLUTION_MINUTES,
     BookView,
@@ -878,12 +879,13 @@ def terminal_transition(
     elif not source_fresh:
         to_state = SignalState.INVALIDATED
         reason = "Required source became stale or invalid"
-    elif candidate.direction == "BULLISH" and latest_price <= Decimal(str(candidate.invalidation)):
+    elif executed_stop_breached(
+        candidate.direction,
+        Decimal(str(candidate.invalidation)),
+        latest_price,
+    ):
         to_state = SignalState.INVALIDATED
-        reason = "Bullish invalidation price breached"
-    elif candidate.direction == "BEARISH" and latest_price >= Decimal(str(candidate.invalidation)):
-        to_state = SignalState.INVALIDATED
-        reason = "Bearish invalidation price breached"
+        reason = f"{candidate.direction.title()} invalidation price breached"
     if to_state is None:
         return None
     return lifecycle_event(

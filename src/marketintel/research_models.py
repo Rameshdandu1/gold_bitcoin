@@ -188,7 +188,7 @@ class ExperimentConfig(BaseModel):
     holdout_start_utc: datetime | None = None
     embargo_seconds: int = Field(default=0, ge=0)
     code_commit: str = "UNRECORDED"
-    algorithm_version: str = "phase6-closeout-shared-v2"
+    algorithm_version: str = "phase6-workflow-acceptance-shared-v3"
     engine_policy_version: str = "m3a-v2"
     feature_policy_version: str = "phase5-feature-state-v1"
     revision_selection_policy: Literal["LATEST_ELIGIBLE_BEFORE_OUTCOME"] = (
@@ -363,6 +363,34 @@ class ArmDecision(BaseModel):
             _aware(self.provider_completed_at_utc, "provider_completed_at_utc")
         if self.provider_available_at_utc is not None:
             _aware(self.provider_available_at_utc, "provider_available_at_utc")
+        return self
+
+
+class ResearchLifecycleEvent(BaseModel):
+    """Immutable candidate lifecycle fact derived from an available market event."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    opportunity_id: str
+    revision_id: str
+    event_id: str
+    from_state: Literal["CANDIDATE"] = "CANDIDATE"
+    to_state: Literal["INVALIDATED", "EXPIRED"]
+    occurred_at_utc: datetime
+    available_at_utc: datetime
+    reason: str
+    price_source: Literal["EXECUTED_TRADE", "SOURCE_STATE", "CLOCK"]
+    source_event_id: str | None = None
+    price: Decimal | None = None
+
+    @model_validator(mode="after")
+    def valid_times(self) -> ResearchLifecycleEvent:
+        _aware(self.occurred_at_utc, "occurred_at_utc")
+        _aware(self.available_at_utc, "available_at_utc")
+        if self.available_at_utc < self.occurred_at_utc:
+            raise ValueError("Lifecycle evidence cannot be available before it occurred")
+        if self.price is not None and (not self.price.is_finite() or self.price <= 0):
+            raise ValueError("Lifecycle price must be finite and positive")
         return self
 
 

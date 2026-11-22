@@ -17,6 +17,7 @@ from marketintel.research_models import (
     ReplayObservation,
     ReplayPoint,
     ResearchCandidate,
+    ResearchLifecycleEvent,
     ResearchOutcome,
 )
 
@@ -103,6 +104,20 @@ class ResearchStore:
                     PRIMARY KEY (experiment_id, opportunity_id, revision_id, arm),
                     FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
                 );
+                CREATE TABLE IF NOT EXISTS research_lifecycle_events (
+                    experiment_id TEXT NOT NULL,
+                    opportunity_id TEXT NOT NULL,
+                    revision_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    available_at_utc TEXT NOT NULL,
+                    event_json TEXT NOT NULL,
+                    PRIMARY KEY (experiment_id, opportunity_id, revision_id, event_id),
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
+                );
+                CREATE INDEX IF NOT EXISTS research_lifecycle_available
+                    ON research_lifecycle_events (
+                        experiment_id, opportunity_id, revision_id, available_at_utc
+                    );
                 CREATE TABLE IF NOT EXISTS research_outcomes (
                     experiment_id TEXT NOT NULL,
                     opportunity_id TEXT NOT NULL,
@@ -571,6 +586,58 @@ class ResearchStore:
             ).fetchall()
         return [ResearchCandidate.model_validate_json(row["candidate_json"]) for row in rows]
 
+    def candidate_page(
+        self, experiment_id: str, *, offset: int, limit: int = 200
+    ) -> list[ResearchCandidate]:
+        """Return one stable candidate page for bounded workflow projection."""
+        if offset < 0 or limit < 1:
+            raise ValueError("Candidate page offset/limit is invalid")
+        limit = min(limit, 500)
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "SELECT candidate_json FROM research_candidates WHERE experiment_id=? "
+                "ORDER BY persisted_at_utc, opportunity_id, revision_id LIMIT ? OFFSET ?",
+                (experiment_id, limit, offset),
+            ).fetchall()
+        return [ResearchCandidate.model_validate_json(row["candidate_json"]) for row in rows]
+
+    def active_candidate_page(
+        self, experiment_id: str, *, offset: int, limit: int = 200
+    ) -> list[ResearchCandidate]:
+        """Page only candidates without a durable terminal lifecycle event."""
+        if offset < 0 or limit < 1:
+            raise ValueError("Active candidate page offset/limit is invalid")
+        limit = min(limit, 500)
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "SELECT c.candidate_json FROM research_candidates c "
+                "WHERE c.experiment_id=? AND NOT EXISTS ("
+                "SELECT 1 FROM research_lifecycle_events l "
+                "WHERE l.experiment_id=c.experiment_id "
+                "AND l.opportunity_id=c.opportunity_id AND l.revision_id=c.revision_id) "
+                "ORDER BY c.persisted_at_utc, c.opportunity_id, c.revision_id LIMIT ? OFFSET ?",
+                (experiment_id, limit, offset),
+            ).fetchall()
+        return [ResearchCandidate.model_validate_json(row["candidate_json"]) for row in rows]
+
+    def candidate_revision_is_current(
+        self,
+        experiment_id: str,
+        opportunity_id: str,
+        revision_id: str,
+        *,
+        at_utc: datetime,
+    ) -> bool:
+        """Resolve the newest factual revision visible at an application boundary."""
+        with _connect(self.path) as db:
+            row = db.execute(
+                "SELECT revision_id FROM research_candidates WHERE experiment_id=? "
+                "AND opportunity_id=? AND persisted_at_utc<=? "
+                "ORDER BY persisted_at_utc DESC, revision_id DESC LIMIT 1",
+                (experiment_id, opportunity_id, at_utc.isoformat()),
+            ).fetchone()
+        return row is not None and row["revision_id"] == revision_id
+
     def save_arm_decision(
         self,
         experiment_id: str,
@@ -615,13 +682,70 @@ class ResearchStore:
             ).fetchall()
         return [ArmDecision.model_validate_json(row["decision_json"]) for row in rows]
 
+    def save_lifecycle_event(
+        self,
+        experiment_id: str,
+        event: ResearchLifecycleEvent,
+    ) -> bool:
+        """Persist one terminal fact without allowing a later recovery to rewrite it."""
+        payload = event.model_dump_json()
+        with _connect(self.path) as db:
+            cursor = db.execute(
+                "INSERT OR IGNORE INTO research_lifecycle_events VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    experiment_id,
+                    event.opportunity_id,
+                    event.revision_id,
+                    event.event_id,
+                    event.available_at_utc.isoformat(),
+                    payload,
+                ),
+            )
+            if cursor.rowcount == 0:
+                existing = db.execute(
+                    "SELECT event_json FROM research_lifecycle_events WHERE experiment_id=? "
+                    "AND opportunity_id=? AND revision_id=? AND event_id=?",
+                    (
+                        experiment_id,
+                        event.opportunity_id,
+                        event.revision_id,
+                        event.event_id,
+                    ),
+                ).fetchone()
+                if existing["event_json"] != payload:
+                    raise ValueError("Research lifecycle event identity is immutable")
+                return False
+        return True
+
+    def lifecycle_events(
+        self,
+        experiment_id: str,
+        opportunity_id: str,
+        revision_id: str,
+        *,
+        through_utc: datetime | None = None,
+    ) -> list[ResearchLifecycleEvent]:
+        clauses = ["experiment_id=?", "opportunity_id=?", "revision_id=?"]
+        values: list[object] = [experiment_id, opportunity_id, revision_id]
+        if through_utc is not None:
+            clauses.append("available_at_utc<=?")
+            values.append(through_utc.isoformat())
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "SELECT event_json FROM research_lifecycle_events WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY available_at_utc, event_id",
+                values,
+            ).fetchall()
+        return [ResearchLifecycleEvent.model_validate_json(row["event_json"]) for row in rows]
+
     def save_outcome(
         self,
         experiment_id: str,
         revision_id: str,
         outcome: ResearchOutcome,
         *,
-        evaluation_version: str = "phase6-closeout-outcome-v2",
+        evaluation_version: str = "phase6-workflow-acceptance-outcome-v3",
         persisted_at: datetime | None = None,
     ) -> bool:
         payload = outcome.model_dump_json()
@@ -698,6 +822,103 @@ class ResearchStore:
                 raise ValueError("Quote payload availability conflicts with its envelope")
             result.append(quote)
         return result
+
+    def quote_window(
+        self,
+        experiment_id: str,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        opportunity_id: str | None = None,
+        page_size: int = 500,
+    ) -> tuple[list[ExecutableQuote], int, int]:
+        """Page only a candidate's factual quote interval, never symbol history."""
+        if page_size < 1 or end_utc < start_utc:
+            raise ValueError("Quote window/page is invalid")
+        result: list[ExecutableQuote] = []
+        offset = 0
+        maximum_page = 0
+        scanned = 0
+        while True:
+            with _connect(self.path) as db:
+                rows = db.execute(
+                    "SELECT observation_json FROM research_observations "
+                    "WHERE experiment_id=? AND kind='EXECUTABLE_QUOTE' AND symbol=? "
+                    "AND available_at_utc>=? AND available_at_utc<=? "
+                    "ORDER BY available_at_utc, persistence_sequence, observation_id "
+                    "LIMIT ? OFFSET ?",
+                    (
+                        experiment_id,
+                        symbol,
+                        start_utc.isoformat(),
+                        end_utc.isoformat(),
+                        page_size,
+                        offset,
+                    ),
+                ).fetchall()
+            maximum_page = max(maximum_page, len(rows))
+            scanned += len(rows)
+            for stored in rows:
+                row = ReplayObservation.model_validate_json(stored["observation_json"])
+                payload = dict(row.payload)
+                bound_opportunity = payload.pop("opportunity_id", None)
+                if bound_opportunity is not None and bound_opportunity != opportunity_id:
+                    continue
+                payload.setdefault("event_id", row.observation_id)
+                payload.setdefault("venue", row.venue)
+                payload.setdefault("symbol", row.symbol)
+                payload.setdefault("observed_at_utc", row.exchange_time_utc)
+                payload.setdefault("available_at_utc", row.available_at_utc)
+                quote = ExecutableQuote.model_validate(payload)
+                if quote.available_at_utc != row.available_at_utc:
+                    raise ValueError("Quote payload availability conflicts with its envelope")
+                result.append(quote)
+            if len(rows) < page_size:
+                break
+            offset += len(rows)
+        return result, maximum_page, scanned
+
+    def source_transition_window(
+        self,
+        experiment_id: str,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        page_size: int = 500,
+    ) -> tuple[list[tuple[datetime, str]], int]:
+        """Page source state facts for the same bounded candidate interval."""
+        if page_size < 1 or end_utc < start_utc:
+            raise ValueError("Source-transition window/page is invalid")
+        result: list[tuple[datetime, str]] = []
+        offset = 0
+        maximum_page = 0
+        while True:
+            with _connect(self.path) as db:
+                rows = db.execute(
+                    "SELECT observation_json FROM research_observations "
+                    "WHERE experiment_id=? AND kind='SOURCE_TRANSITION' AND symbol=? "
+                    "AND available_at_utc>=? AND available_at_utc<=? "
+                    "ORDER BY available_at_utc, persistence_sequence, observation_id "
+                    "LIMIT ? OFFSET ?",
+                    (
+                        experiment_id,
+                        symbol,
+                        start_utc.isoformat(),
+                        end_utc.isoformat(),
+                        page_size,
+                        offset,
+                    ),
+                ).fetchall()
+            maximum_page = max(maximum_page, len(rows))
+            for stored in rows:
+                row = ReplayObservation.model_validate_json(stored["observation_json"])
+                result.append((row.available_at_utc, str(row.payload["state"])))
+            if len(rows) < page_size:
+                break
+            offset += len(rows)
+        return result, maximum_page
 
     def save_points(self, experiment_id: str, points: list[ReplayPoint]) -> None:
         with _connect(self.path) as db:
@@ -1447,6 +1668,25 @@ class PaperLedger:
             for row in rows
             if row["outcome_json"] is not None
         }
+        return decisions, outcomes
+
+    def candidate_decision_states(
+        self,
+        run_id: str,
+        opportunity_id: str,
+        revision_id: str,
+    ) -> tuple[set[str], set[str]]:
+        """Return persisted and terminal arms for one active paper candidate."""
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "SELECT d.arm, d.outcome_json FROM paper_decisions d "
+                "JOIN paper_decision_evidence e "
+                "USING (opportunity_id, revision_id, arm) WHERE e.run_id=? "
+                "AND d.opportunity_id=? AND d.revision_id=?",
+                (run_id, opportunity_id, revision_id),
+            ).fetchall()
+        decisions = {row["arm"] for row in rows}
+        outcomes = {row["arm"] for row in rows if row["outcome_json"] is not None}
         return decisions, outcomes
 
     def summary(self, *, experiment_id: str | None = None, include_protected: bool = True) -> dict:

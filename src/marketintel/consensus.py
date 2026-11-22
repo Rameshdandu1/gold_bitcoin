@@ -5,7 +5,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from marketintel.analysis import CanonicalAnalysis, canonical_json_bytes
-from marketintel.application_policy import ApplicationPolicyInput, evaluate_application_policy
+from marketintel.application_policy import (
+    ApplicationPolicyInput,
+    current_target_feasible,
+    evaluate_application_policy,
+)
 from marketintel.models import AnalystAssessment, Candidate, ConsensusResult, Status
 from marketintel.review import (
     ConsensusDecisionV2,
@@ -93,27 +97,22 @@ def evaluate_current_risk(
     invalidation = Decimal(envelope.invalidation)
     bid = Decimal(eligibility.best_bid)
     ask = Decimal(eligibility.best_ask)
-    quote_entry = ask if envelope.direction == "BULLISH" else bid
-    risk = (
-        quote_entry - invalidation
-        if envelope.direction == "BULLISH"
-        else invalidation - quote_entry
-    )
-
-    costs = (
-        quote_entry
-        * (Decimal(eligibility.fee_bps or "0") + Decimal(eligibility.slippage_bps or "0"))
-        / Decimal("10000")
-    )
     crossed = set(eligibility.target_crossed_indices)
     feasible: list[int] = []
     for index in sorted(approved):
         if index < 1 or index > len(envelope.targets) or index in crossed:
             continue
         target = Decimal(envelope.targets[index - 1])
-        gross = target - quote_entry if envelope.direction == "BULLISH" else quote_entry - target
-        net = gross - costs
-        if risk > 0 and net > 0 and net / risk >= Decimal(eligibility.minimum_net_reward_risk):
+        if current_target_feasible(
+            direction=envelope.direction,
+            invalidation=invalidation,
+            target=target,
+            best_bid=bid,
+            best_ask=ask,
+            fee_bps=Decimal(eligibility.fee_bps or "0"),
+            slippage_bps=Decimal(eligibility.slippage_bps or "0"),
+            minimum_net_reward_risk=Decimal(eligibility.minimum_net_reward_risk),
+        ):
             feasible.append(index)
     if not feasible:
         gate(

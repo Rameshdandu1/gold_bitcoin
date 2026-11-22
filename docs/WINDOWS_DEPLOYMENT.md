@@ -126,6 +126,15 @@ Use the repository virtual environment and Windows paths. Research and paper fil
 .\.venv\Scripts\python.exe -m marketintel.paper_worker --config config\paper-worker.example.json --once
 ```
 
+For a fresh-process Python-allocation probe, generate a fixture with a declared historical prefix
+and wrap the same public command. This is an offline capacity regression, not total service RSS:
+
+```powershell
+.\.venv\Scripts\python.exe -m marketintel.research_fixtures --output data\phase6-memory --historical-quotes 8000
+.\.venv\Scripts\python.exe scripts\phase6-workflow-memory-probe.py -- run-workflow --manifest data\phase6-memory\gold-manifest.json --config data\phase6-memory\gold-experiment.json --database data\phase6-memory\gold-research.sqlite3 --production-database data\marketintel.sqlite3
+.\.venv\Scripts\python.exe scripts\phase6-workflow-memory-probe.py -- paper-workflow --database data\phase6-memory\gold-research.sqlite3 --paper-database data\phase6-memory\gold-paper.sqlite3 --production-database data\marketintel.sqlite3 --experiment-id phase5-gold-workflow-v1
+```
+
 Repeat the workflow with the BTC manifest/config and `phase5-btc-workflow-v1`. The connected paper
 command persists frozen arms before latency-adjusted eligible entry and derives outcomes from later
 quotes/source events. Fixture decisions are `SIMULATED_PROSPECTIVE`, not elapsed prospective
