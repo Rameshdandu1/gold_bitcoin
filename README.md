@@ -147,13 +147,56 @@ Build frontend:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run typecheck
 npm run build
 npm run dev
 ```
 
 Open `http://127.0.0.1:5173` (Vite proxies `/api` to local FastAPI). No keys in frontend.
+
+### Operator interface
+
+The responsive dashboard has five views:
+
+| View | Available evidence and interactions |
+| --- | --- |
+| Overview | Gold/BTC selection; 30-minute, 1-hour and 4-hour engine cards; recorded candidate price levels; lifecycle; searchable candidate journal |
+| Liquidity sweeps | Recorded candidates whose trigger includes a sweep, with the attached closed-candle evidence |
+| AI reviews | Independent GPT and Claude attempts, model names, rationales, counter-evidence, token usage and historical consensus |
+| Research | Experiment selection, dataset and configuration provenance, saved reports and experiment-scoped paper transitions |
+| System health | Feature configuration, source observations, service heartbeats, recorded spend and queue state |
+
+All API requests are read-only. Observation times can be displayed in IST (default)
+or UTC. Health, engine and candidate status poll 15 seconds after each request
+completes; research evidence refreshes on request. Snapshot requests are cancelled
+when selection changes, and mismatching candidate/snapshot identities are withheld.
+Provider verdicts require matching candidate, revision, snapshot, evidence digest,
+instrument, horizon and direction before they are displayed.
+
+The price-level map displays stored entry, invalidation and target levels. It is not
+a live price chart. Historical AI confirmation is shown separately from current
+lifecycle, including expiry and invalidation. Technical reference levels are not
+liquidation heatmap clusters. Missing data stays unavailable.
+
+[Open the implementation and verification notes](docs/UI_IMPLEMENTATION.md).
+An explicitly hypothetical, self-contained visual preview is provided at
+`docs/ui-preview/preview.html`; download it and open it in a browser. It contains no
+live account data, makes no API calls and is excluded from the production build.
+
+For the optional browser smoke checks, install Playwright in a **test environment**,
+start Vite, and run from the repository root:
+
+```powershell
+python -m pip install playwright
+python -m playwright install chromium
+# Set CHROMIUM_PATH to your installed Chromium executable if needed.
+python frontend/tests/ui_smoke.py --base-url http://127.0.0.1:5173 --screenshots docs/ui-preview
+```
+
+The test runner intercepts API reads with labelled hypothetical fixtures and blocks
+external requests. See the verification notes for which checks were executed and
+which still require a browser-capable environment.
 
 ## Key environment settings
 Copy `.env.example`. Do not commit `.env`. Important variables:
