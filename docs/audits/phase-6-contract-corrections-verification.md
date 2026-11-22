@@ -81,7 +81,7 @@ six documented reasons. The detached worktree was then removed. On the correctiv
 | `npm ci --no-audit --no-fund` | Passed; 69 packages; npm reported the existing pending esbuild install-script approval warning |
 | `npm run typecheck` | Passed with Node 24.18.0 / npm 11.16.0 |
 | `npm run build` | Passed after granting the build read access blocked by the filesystem sandbox; Vite built 29 modules |
-| Hosted Windows CI | Pending the corrective PR run; update this row with the actual run before merge |
+| Hosted Windows CI | **Passed** — PR #17 CI run 73 (`45017814906`), backend and frontend jobs, head `411b879` |
 
 ## Public Gold/BTC workflows and hashes
 
