@@ -4,6 +4,10 @@ This is a staged single-host research runbook for Windows Server 2022/2025. It d
 Windows service installation, external provider, live feed soak, Slack delivery or deployment was
 performed during Phase 3 development.
 
+Use the prepared [bounded command pack](OPERATIONAL_VALIDATION_COMMAND_PACK.md) and
+[PASS/FAIL/BLOCKED/NOT_RUN worksheet](audits/operational-validation-template.md) for destination
+acceptance. They are offline preparation, not evidence that any destination or external check ran.
+
 ## 1. Install and verify
 
 Use Python 3.12+, Node 20+/22 and Git under an unprivileged local identity. Keep the checkout, `.env`,

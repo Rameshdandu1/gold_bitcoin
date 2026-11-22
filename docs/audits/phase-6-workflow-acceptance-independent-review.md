@@ -3,6 +3,11 @@
 Review date: **2026-11-22 (Asia/Kolkata)**. All scenario times below are UTC. Every market price,
 provider answer and outcome in this review is **hypothetical synthetic software evidence**.
 
+**Later disposition:** Corrective code commit `b8319ae` addresses P6W-01 through P6W-06 without
+rewriting this review's executed results. See
+[the contract-corrections verification](phase-6-contract-corrections-verification.md) for the
+red/green cases, changed scientific versions and remaining external gates.
+
 ## Verdict and scope
 
 Reviewed merged main **`e9f419f5ef576ec957f9d59107ab3f7f06815b23`**, including

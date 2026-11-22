@@ -1,0 +1,74 @@
+{
+  "template_status": "NOT_AUTHORIZED_NOT_STARTED",
+  "evidence_mode": "RECORDED_PROSPECTIVE_MODEL",
+  "external_flags": {
+    "live_ingestion_enabled": false,
+    "ai_enabled": false,
+    "alerts_enabled": false,
+    "paper_collection_enabled": false,
+    "trading_enabled": false
+  },
+  "freeze_before_collection": {
+    "code_commit": null,
+    "dataset_manifest_id": null,
+    "dataset_content_hash": null,
+    "configuration_hash": null,
+    "source_identity": null,
+    "source_generation": null,
+    "created_at_utc": null
+  },
+  "engines": [
+    "GOLD_FAST",
+    "GOLD_HOURLY",
+    "GOLD_SESSION",
+    "BTC_FAST",
+    "BTC_HOURLY",
+    "BTC_SESSION"
+  ],
+  "arms": [
+    "RULES_ONLY",
+    "RULES_PLUS_GPT",
+    "RULES_PLUS_CLAUDE",
+    "RULES_PLUS_DUAL"
+  ],
+  "authorized_limits": {
+    "start_utc": null,
+    "end_utc": null,
+    "maximum_provider_requests": null,
+    "maximum_provider_attempts": null,
+    "maximum_input_tokens": null,
+    "maximum_output_tokens": null,
+    "maximum_cost_microusd": null,
+    "maximum_notifications": 0
+  },
+  "frozen_cost_policy": {
+    "fee_bps_per_side": null,
+    "slippage_bps_per_side": null,
+    "funding_policy": null,
+    "contract_units_source": null
+  },
+  "missing_data_policy": {
+    "source_gap": "INCOMPLETE_OR_UNAVAILABLE",
+    "missing_provider": "UNAVAILABLE_NO_IMPUTATION",
+    "ambiguous_barrier_order": "AMBIGUOUS",
+    "missing_executable_quote": "INCOMPLETE_NO_MONETARY_OUTCOME"
+  },
+  "partition_policy": {
+    "training": null,
+    "development": null,
+    "protected_holdout_start_utc": null,
+    "embargo_seconds": null,
+    "final_holdout_opening": "EXPLICIT_ONE_TIME_ACKNOWLEDGEMENT"
+  },
+  "predeclared_comparisons": [
+    "RULES_PLUS_DUAL_VS_RULES_ONLY_AFTER_ATTRIBUTABLE_COST",
+    "FAST_VS_SESSION_ON_COMMON_ELIGIBLE_OBSERVATIONS"
+  ],
+  "evidence_sufficiency": {
+    "minimum_unique_opportunities_per_engine_arm": null,
+    "minimum_source_coverage_fraction": null,
+    "maximum_incomplete_fraction": null,
+    "minimum_independent_elapsed_regimes": null,
+    "insufficient_data_result": "INSUFFICIENT_DATA_NO_PERFORMANCE_CLAIM"
+  }
+}
