@@ -4,7 +4,22 @@ All notable changes to this project are documented in this file.
 
 The project uses four-part release versions for shipped milestones.
 
-## Unreleased — independent workflow-acceptance review
+## Unreleased — Phase 6 contract corrections
+
+- Atomically persist each candidate with its deterministic rules arm and explicitly reject obsolete
+  derived-checkpoint semantics without deleting the old experiment.
+- Preserve exchange/receipt clocks for executed stops and per-target crossings; apply them at each
+  provider, dual, paper-entry and outcome boundary.
+- Preserve raw GPT/Claude verdicts separately from immutable individual market dispositions so dual
+  review uses its own contemporary market gate.
+- Require source, quote, instrument and barrier continuity before pricing an executed stop; use an
+  executable quote side rather than another trade's print.
+- Index provider history durably, retire resolved checkpoint working state, and page API/report
+  projections before model construction with single-pass metrics and streamed exports.
+- Add the controlled Windows/live validation worksheet, bounded command pack and unstarted
+  six-engine/four-arm prospective experiment template. No external check ran.
+
+## Independent workflow-acceptance review
 
 - Verify merged PR #15 against the 260-test baseline, Gold/BTC public workflows, original exact
   corrections and hosted Windows CI; preserve those improvements and historical measurements.

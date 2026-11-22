@@ -1,23 +1,28 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
-## Current status: Phase 6 contract corrections required
+## Current status: Phase 6 offline contract corrections implemented
 
 The [independent workflow-acceptance review](docs/audits/phase-6-workflow-acceptance-independent-review.md)
 of merged PR #15 at `e9f419f5ef576ec957f9d59107ab3f7f06815b23` confirms 260 passing tests, the
 original later-book and stop/recovery corrections, and bounded irrelevant-quote loading. It also
-reproduces six remaining recovery, clock, target-history, dual-policy, outcome-coverage and
-historical-state/output findings within the existing requirements.
+reproduced six recovery, clock, target-history, dual-policy, outcome-coverage and
+historical-state/output findings within the existing requirements. The corrective implementation
+and its offline evidence are recorded in the
+[contract-corrections verification](docs/audits/phase-6-contract-corrections-verification.md).
 
-Next coding task: [CODEX_PHASE_6_CONTRACT_CORRECTIONS.md](prompts/CODEX_PHASE_6_CONTRACT_CORRECTIONS.md).
-Prepare the subsequent [operational validation](prompts/CODEX_OPERATIONAL_VALIDATION.md) offline;
-run the authorized external checks only after the software entry gate and prerequisites pass.
+P6W-01 through P6W-06 now have regression coverage: candidate/rules creation is atomic, event and
+receipt clocks plus per-target crossings are durable, provider verdicts are distinct from each
+arm's market disposition, executed stops require continuous executable evidence, resolved provider
+working state retires, and report/API projections page before model construction. Scientific
+contracts are versioned; old derived checkpoints are retained but explicitly require a new isolated
+experiment rather than silently mixing outcome semantics.
 
 The original [closeout verification report](docs/audits/phase-6-closeout-verification.md) is retained
 as historical implementation evidence. The later
 [workflow acceptance verification](docs/audits/phase-6-workflow-acceptance-verification.md) retains
 its executed results; the independent review qualifies its complete-acceptance claim. Tested
 checkpoint/paper resume controls remain verified, while the candidate/initial-arm write boundary
-needs correction.
+is preserved by the corrected atomic write and fresh-process controls.
 
 After the finite corrections, the sequence is controlled destination Windows/live integration
 validation, then prospective paper observation. Derivatives/execution remain deferred.
@@ -28,9 +33,9 @@ Phase 6 adds availability/provenance fields, cadence evaluation, quote-side outc
 research and paper reads and a connected synthetic paper command. Closeout corrected the reviewed
 clock-conflict, coverage, paper-holdout and terminal/progress failures. Shared predicates, derived-state
 resume and 500-event input pages are implemented. Corrected workflows additionally page candidate
-quote/source windows, retain lifecycle facts, and retire completed paper candidates. Late-event and
-outcome semantics, completed provider working state and output projections still require the
-reviewed corrections. Research and paper state remain isolated
+quote/source windows, retain lifecycle and target-crossing facts, retire completed paper/provider
+working state, and stream latest-revision report exports in bounded pages. Research and paper state
+remain isolated
 from production review, budget and notification state. The included generator creates synthetic
 verification streams; it does not establish strategy accuracy or profitability.
 
@@ -65,11 +70,12 @@ and disabled:
 
 > **Not production ready, not an automatic trader and not evidence of profitable signals.** By default no live data ingestion or paid AI calls happen. Gold token XAUT/PAXG may not be listed at all times; the adapter discovers rather than assumes listings. Options/execution, pre-collection market history, macro news and calibrated probabilities are planned, not already built.
 
-**Offline workflow status (2026-11-22):** The 260-test baseline and original regression/resource
-cases pass. With 1,000 versus 8,000 irrelevant pre-candidate quotes, paper processing uses bounded
-candidate windows. Increasing completed candidate history instead exposes retained provider
-checkpoints and full output materialization; P6W-01 through P6W-06 remain open in the independent
-review. Live provider/model
+**Offline workflow status (2026-11-22):** The reviewed 260-test baseline and original
+regression/resource cases are preserved. Contract-correction tests cover the exact transaction,
+late-event, target-recovery, temporary-book, incomplete-stop and bounded-projection cases. A
+600-opportunity report probe constructs no more than 200 selected records per page, while API limit
+1 constructs one record; resolved provider objects are absent from complete checkpoints while the
+indexed journal remains auditable. Live provider/model
 entitlement, adequate licensed historical data, genuine historical AI assessments, Slack delivery,
 prospective observation duration, destination Windows Server recovery, market-data soak and
 empirical strategy performance remain unverified.

@@ -342,6 +342,14 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                     through_utc=through,
                 )
             )
+            target_crossings = tuple(
+                store.target_crossings(
+                    args.experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    through_utc=through,
+                )
+            )
             for arm in unresolved:
                 identity = (candidate.opportunity_id, candidate.revision_id, arm.arm)
                 outcome = evaluate_quotes(
@@ -359,6 +367,7 @@ def command_paper_workflow(args: argparse.Namespace) -> int:
                     entry_latency_ms=entry_latency_ms,
                     source_transitions=source_rows,
                     lifecycle_events=lifecycle_events,
+                    target_crossings=target_crossings,
                     evaluated_through_utc=at,
                 ).model_copy(update={"market_data_mode": manifest.data_mode})
                 terminal = outcome.code in {
@@ -652,32 +661,42 @@ def command_report(args: argparse.Namespace) -> int:
     if experiment is None:
         raise ValueError("Experiment does not exist")
     manifest, config = experiment
-    selected: dict[str, OpportunityRecord] = {}
-    for row in sorted(
-        store.opportunities(args.experiment_id),
-        key=lambda item: (item.observed_at_utc, item.revision_id),
-    ):
-        selected[row.opportunity_id] = row
-    rows = [
-        row
-        for row in selected.values()
-        if config.holdout_start_utc is None
-        or row.label_information_end_utc < config.holdout_start_utc
-    ]
-    metrics = arm_metrics(rows)
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    projected_count = 0
+    maximum_projection_page = 0
+
+    def projected_rows():
+        nonlocal projected_count, maximum_projection_page
+        offset = 0
+        with (output / "selected-opportunities.jsonl").open("w", encoding="utf-8") as handle:
+            while True:
+                page = store.selected_opportunity_page(args.experiment_id, limit=200, offset=offset)
+                if not page:
+                    return
+                maximum_projection_page = max(maximum_projection_page, len(page))
+                for row in page:
+                    projected_count += 1
+                    handle.write(row.model_dump_json() + "\n")
+                    yield row
+                offset += len(page)
+
+    metrics = arm_metrics(projected_rows())
     summary = {
         "experiment_id": args.experiment_id,
-        "classification": "EXPLORATORY" if rows else "INSUFFICIENT_DATA",
+        "classification": "EXPLORATORY" if projected_count else "INSUFFICIENT_DATA",
         "hypothetical": True,
         "partition": "DEVELOPMENT",
         "dataset_id": manifest.dataset_id,
         "dataset_hash": manifest.content_hash,
         "config_hash": config.canonical_config_hash(),
         "data_mode": manifest.data_mode,
-        "opportunities": len({x.opportunity_id for x in rows}),
-        "revision_records": len(rows),
+        "opportunities": projected_count,
+        "revision_records": projected_count,
+        "resource_evidence": {
+            "projection_page_limit": 200,
+            "maximum_projection_page": maximum_projection_page,
+        },
         "engine_matrix": store.engine_matrix(args.experiment_id),
         "source_coverage": [item.model_dump(mode="json") for item in manifest.coverage],
         "metrics": metrics,
@@ -725,9 +744,6 @@ def command_report(args: argparse.Namespace) -> int:
     )
     _write_json(output / "dataset-manifest.json", manifest.model_dump(mode="json"))
     _write_json(output / "experiment-config.json", config.model_dump(mode="json"))
-    with (output / "selected-opportunities.jsonl").open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(row.model_dump_json() + "\n")
     if args.paper_database:
         paper = PaperLedger(
             Path(args.paper_database).resolve(),

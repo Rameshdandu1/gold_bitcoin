@@ -45,6 +45,7 @@ from marketintel.research_models import (
     ReplayObservation,
     ResearchCandidate,
     ResearchLifecycleEvent,
+    ResearchTargetCrossing,
 )
 from marketintel.research_storage import ResearchStore
 
@@ -370,12 +371,19 @@ class SharedResearchEngine:
             "trade_limit_per_symbol": MAX_TRADES_PER_SYMBOL,
             "maximum_candles_per_series": self.maximum_candle_state,
             "candle_limit_per_series": MAX_CANDLES_PER_SERIES,
+            "active_provider_completions": len(self.provider_completions),
+            "active_provider_completion_bytes": len(
+                json.dumps(
+                    [value.model_dump(mode="json") for value in self.provider_completions.values()],
+                    sort_keys=True,
+                ).encode("utf-8")
+            ),
         }
 
     def checkpoint_state(self) -> dict:
         """Return the complete bounded scientific state needed for a true resume."""
         return {
-            "schema": "phase6-workflow-acceptance-derived-state-v2",
+            "schema": "phase6-contract-corrections-derived-state-v3",
             "instruments": {
                 key: value.model_dump(mode="json") for key, value in self.instruments.items()
             },
@@ -412,10 +420,11 @@ class SharedResearchEngine:
 
     @classmethod
     def from_checkpoint(cls, manifest: DatasetManifest, payload: dict) -> SharedResearchEngine:
-        if payload.get("schema") != "phase6-workflow-acceptance-derived-state-v2":
+        if payload.get("schema") != "phase6-contract-corrections-derived-state-v3":
             raise ValueError(
                 "Unsupported derived workflow checkpoint schema; rebuild this isolated "
-                "research experiment under the workflow-acceptance contract"
+                "research experiment under the phase6-contract-corrections contract; "
+                "the existing database is retained for audit"
             )
         state = cls(manifest)
         state.instruments = {
@@ -518,6 +527,8 @@ def _provider_decision(
         configuration_digest=completion.configuration_digest,
         requested_model_id=completion.requested_model_id,
         returned_model_id=completion.returned_model_id,
+        raw_provider_verdict=completion.decision,
+        raw_supported_target_indices=completion.supported_target_indices,
     )
 
 
@@ -531,6 +542,7 @@ def _apply_market_gate(
     lifecycle_events: tuple[ResearchLifecycleEvent, ...] = (),
     latest_trade_at_utc: datetime | None = None,
     revision_current: bool = True,
+    target_crossed_indices: tuple[int, ...] = (),
 ) -> ArmDecision:
     """Freeze the application verdict at this decision's own evidence boundary."""
     if decision.state != "APPROVED":
@@ -604,7 +616,8 @@ def _apply_market_gate(
     )
     target = candidate.targets[config.target_index - 1]
     target_feasible = bool(
-        bid is not None
+        config.target_index not in target_crossed_indices
+        and bid is not None
         and ask is not None
         and current_target_feasible(
             direction=candidate.direction,
@@ -634,21 +647,23 @@ def _apply_market_gate(
     )
 
 
-def _dual_decision(gpt: ArmDecision, claude: ArmDecision) -> ArmDecision:
-    """Combine the two persisted individual decisions without recreating either one."""
+def _dual_decision(gpt: ArmDecision, claude: ArmDecision, target_index: int) -> ArmDecision:
+    """Combine immutable raw verdicts, leaving the dual market gate independent."""
     ready = max(gpt.ready_at_utc, claude.ready_at_utc)
-    if "UNAVAILABLE" in {gpt.state, claude.state}:
+    verdicts = {gpt.raw_provider_verdict, claude.raw_provider_verdict}
+    if None in verdicts:
         state = "UNAVAILABLE"
         reason = "Both matching contemporary provider assessments were not available"
-    elif "REJECTED" in {gpt.state, claude.state}:
+    elif "REJECT" in verdicts or any(
+        decision.raw_provider_verdict == "CONFIRM"
+        and target_index not in decision.raw_supported_target_indices
+        for decision in (gpt, claude)
+    ):
         state = "REJECTED"
         reason = "At least one independent provider rejected the frozen target"
-    elif "WAIT" in {gpt.state, claude.state}:
+    elif "WAIT" in verdicts:
         state = "WAIT"
-        reason = (
-            "At least one independent provider returned WAIT: "
-            f"GPT={gpt.reason}; CLAUDE={claude.reason}"
-        )
+        reason = "At least one independent provider returned WAIT"
     else:
         state = "APPROVED"
         reason = "Both independent archived assessments approved the frozen target"
@@ -697,7 +712,7 @@ def _decisions(
     gpt = _apply_market_gate(gpt, candidate, config, source_history=source_history, book=book)
     claude = _apply_market_gate(claude, candidate, config, source_history=source_history, book=book)
     dual = _apply_market_gate(
-        _dual_decision(gpt, claude),
+        _dual_decision(gpt, claude, config.target_index),
         candidate,
         config,
         source_history=source_history,
@@ -789,6 +804,21 @@ def run_shared_workflow(
         active_offset += len(active_page)
     maximum_active_candidates = len(active_candidates)
 
+    def completion_for(
+        candidate: ResearchCandidate, provider: Literal["GPT", "CLAUDE"]
+    ) -> ProviderCompletion | None:
+        key = (candidate.opportunity_id, candidate.revision_id, provider)
+        active = state.provider_completions.get(key)
+        if active is not None:
+            return active
+        observation = store.provider_completion_observation(
+            config.experiment_id,
+            candidate.opportunity_id,
+            candidate.revision_id,
+            provider,
+        )
+        return ProviderCompletion.model_validate(observation.payload) if observation else None
+
     def save_checkpoint(status: str) -> None:
         store.save_workflow_checkpoint(
             config.experiment_id,
@@ -834,17 +864,26 @@ def run_shared_workflow(
                     through_utc=at,
                 )
             )
+            crossings = tuple(
+                store.target_crossings(
+                    config.experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    through_utc=at,
+                )
+            )
             latest_trade_at = max(
                 (row.received_at_utc for row in state.trades[candidate.symbol]),
                 default=None,
             )
             for arm, key in keys.items():
-                if arm in existing or key not in state.provider_completions:
+                completion = completion_for(candidate, key[2])
+                if arm in existing or completion is None:
                     continue
                 decision = _provider_decision(
                     candidate,
                     config,
-                    state.provider_completions[key],
+                    completion,
                     arm,
                 )
                 if decision.ready_at_utc > at:
@@ -863,6 +902,15 @@ def run_shared_workflow(
                         candidate.revision_id,
                         at_utc=decision.ready_at_utc,
                     ),
+                    target_crossed_indices=tuple(
+                        sorted(
+                            {
+                                row.target_index
+                                for row in crossings
+                                if row.available_at_utc <= decision.ready_at_utc
+                            }
+                        )
+                    ),
                 )
                 store.save_arm_decision(
                     config.experiment_id,
@@ -877,7 +925,11 @@ def run_shared_workflow(
             ):
                 continue
             dual = _apply_market_gate(
-                _dual_decision(existing["RULES_PLUS_GPT"], existing["RULES_PLUS_CLAUDE"]),
+                _dual_decision(
+                    existing["RULES_PLUS_GPT"],
+                    existing["RULES_PLUS_CLAUDE"],
+                    config.target_index,
+                ),
                 candidate,
                 config,
                 source_history=tuple(state.source_history[candidate.symbol]),
@@ -893,6 +945,19 @@ def run_shared_workflow(
                         existing["RULES_PLUS_CLAUDE"].ready_at_utc,
                     ),
                 ),
+                target_crossed_indices=tuple(
+                    sorted(
+                        {
+                            row.target_index
+                            for row in crossings
+                            if row.available_at_utc
+                            <= max(
+                                existing["RULES_PLUS_GPT"].ready_at_utc,
+                                existing["RULES_PLUS_CLAUDE"].ready_at_utc,
+                            )
+                        }
+                    )
+                ),
             )
             if dual.ready_at_utc <= at:
                 store.save_arm_decision(
@@ -901,6 +966,12 @@ def run_shared_workflow(
                     candidate.revision_id,
                     dual,
                     persisted_at=at,
+                )
+                state.provider_completions.pop(
+                    (candidate.opportunity_id, candidate.revision_id, "GPT"), None
+                )
+                state.provider_completions.pop(
+                    (candidate.opportunity_id, candidate.revision_id, "CLAUDE"), None
                 )
 
     def persist_terminal_facts(row: ReplayObservation) -> None:
@@ -915,6 +986,33 @@ def run_shared_workflow(
         for candidate in tuple(active_candidates.values()):
             if candidate.symbol != row.symbol or candidate.observed_at_utc > row.available_at_utc:
                 continue
+            if trade is not None and trade.event_time_utc < candidate.observed_at_utc:
+                continue
+            if trade is not None:
+                for target_index, target in enumerate(candidate.targets, start=1):
+                    crossed = (
+                        trade.price >= target
+                        if candidate.direction == "BULLISH"
+                        else trade.price <= target
+                    )
+                    if not crossed:
+                        continue
+                    store.save_target_crossing(
+                        config.experiment_id,
+                        ResearchTargetCrossing(
+                            opportunity_id=candidate.opportunity_id,
+                            revision_id=candidate.revision_id,
+                            target_index=target_index,
+                            event_id=hashlib.sha256(
+                                f"{candidate.opportunity_id}|{candidate.revision_id}|"
+                                f"{row.observation_id}|TARGET|{target_index}".encode()
+                            ).hexdigest(),
+                            occurred_at_utc=trade.event_time_utc,
+                            available_at_utc=row.available_at_utc,
+                            source_event_id=row.observation_id,
+                            price=trade.price,
+                        ),
+                    )
             reason = None
             price_source: Literal["EXECUTED_TRADE", "SOURCE_STATE"]
             price = None
@@ -938,7 +1036,9 @@ def run_shared_workflow(
                         f"{candidate.opportunity_id}|{candidate.revision_id}|{row.observation_id}|{reason}".encode()
                     ).hexdigest(),
                     to_state="INVALIDATED",
-                    occurred_at_utc=row.available_at_utc,
+                    occurred_at_utc=(
+                        trade.event_time_utc if trade is not None else row.exchange_time_utc
+                    ),
                     available_at_utc=row.available_at_utc,
                     reason=reason,
                     price_source=price_source,
@@ -983,15 +1083,6 @@ def run_shared_workflow(
             if result.candidate is None:
                 continue
             candidate = to_research_candidate(result.candidate, instrument)
-            created = store.save_candidate(
-                config.experiment_id,
-                candidate,
-                persisted_at=at,
-            )
-            if not created:
-                continue
-            active_candidates[(candidate.opportunity_id, candidate.revision_id)] = candidate
-            maximum_active_candidates = max(maximum_active_candidates, len(active_candidates))
             rules = _decisions(
                 candidate,
                 config,
@@ -999,14 +1090,16 @@ def run_shared_workflow(
                 manifest.data_mode,
                 book=state.books.get(candidate.symbol),
             )[0]
-            store.save_arm_decision(
+            created = store.save_candidate_with_initial_decision(
                 config.experiment_id,
-                candidate.opportunity_id,
-                candidate.revision_id,
+                candidate,
                 rules,
                 persisted_at=at,
             )
-            generated += 1
+            if created:
+                active_candidates[(candidate.opportunity_id, candidate.revision_id)] = candidate
+                maximum_active_candidates = max(maximum_active_candidates, len(active_candidates))
+                generated += 1
 
     for input_index, row in enumerate(ordered, start=1):
         if input_index <= start_offset:
@@ -1087,9 +1180,7 @@ def run_shared_workflow(
         ):
             if arm in decisions_by_arm:
                 continue
-            completion = state.provider_completions.get(
-                (candidate.opportunity_id, candidate.revision_id, provider)
-            )
+            completion = completion_for(candidate, provider)
             decision = _provider_decision(candidate, config, completion, arm)
             store.save_arm_decision(
                 config.experiment_id,
@@ -1103,6 +1194,7 @@ def run_shared_workflow(
             decision = _dual_decision(
                 decisions_by_arm["RULES_PLUS_GPT"],
                 decisions_by_arm["RULES_PLUS_CLAUDE"],
+                config.target_index,
             )
             store.save_arm_decision(
                 config.experiment_id,
@@ -1131,6 +1223,11 @@ def run_shared_workflow(
                 config.experiment_id, candidate.opportunity_id, candidate.revision_id
             )
         )
+        target_crossings = tuple(
+            store.target_crossings(
+                config.experiment_id, candidate.opportunity_id, candidate.revision_id
+            )
+        )
         source_rows, source_page = store.source_transition_window(
             config.experiment_id,
             candidate.symbol,
@@ -1152,6 +1249,7 @@ def run_shared_workflow(
                 entry_latency_ms=config.entry_latency_ms,
                 source_transitions=source_rows,
                 lifecycle_events=lifecycle_events,
+                target_crossings=target_crossings,
             )
             outcome = outcome.model_copy(update={"market_data_mode": manifest.data_mode})
             store.save_outcome(
@@ -1192,6 +1290,13 @@ def run_shared_workflow(
         )
         store.save_opportunity(config.experiment_id, record)
         records_count += 1
+        if all(arm in decisions_by_arm for arm in RESEARCH_ARMS):
+            state.provider_completions.pop(
+                (candidate.opportunity_id, candidate.revision_id, "GPT"), None
+            )
+            state.provider_completions.pop(
+                (candidate.opportunity_id, candidate.revision_id, "CLAUDE"), None
+            )
     store.record_action_counts(
         config.experiment_id,
         scope="OFFLINE_SHARED_WORKFLOW",

@@ -9,6 +9,8 @@ provider rows and outcomes in this report are synthetic software evidence, not o
 original corrections. It also reproduces P6W-01 through P6W-06 in recovery, event/target facts, dual
 gating, outcome coverage and whole-workflow state/output bounds. This report remains historical
 implementation evidence; its complete-acceptance statements are qualified by that later review.
+The subsequent [contract-corrections verification](phase-6-contract-corrections-verification.md)
+records the P6W-01 through P6W-06 disposition at code commit `b8319ae`.
 
 ## Scope and identities
 

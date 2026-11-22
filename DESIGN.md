@@ -1,6 +1,6 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: v0.6 implementation / Phase 6 contract corrections pending; external validation follows. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: v0.6 implementation / Phase 6 offline contract corrections implemented; external validation follows. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
@@ -16,7 +16,9 @@ exact corrections and tested resume paths. The later
 the exact P6C-01/02/03 corrections and two-length resource evidence. The
 [independent workflow-acceptance review](docs/audits/phase-6-workflow-acceptance-independent-review.md)
 confirms those controls but reproduces P6W-01 through P6W-06 in the existing recovery/parity/resource
-contracts. Routine live operation follows those corrections and the external validation gates.
+contracts. Their corrected evidence is recorded in the
+[contract-corrections verification](docs/audits/phase-6-contract-corrections-verification.md).
+Routine live operation follows the external validation gates.
 
 The alert worker refreshes its clock at each risk attempt and again inside the short dispatch
 authorization transaction. The eligibility token and evaluated trade set use the same receive-time
@@ -36,10 +38,11 @@ The scheduler evaluates every frozen cadence even during input silence. Source t
 applied at their availability time to provider readiness and outcome eligibility. Production
 consensus and connected research reuse clock-injected predicates for revision, lifecycle, expiry,
 source, stop, spread, entry drift and current target economics. Individual arm decisions are
-written once at their own readiness boundary. The current dual constructor incorrectly inherits
-earlier individual market WAIT states; provider verdicts need separate representation. Research
-also needs equivalent event-time bounds and executed target history. Post-observation stop/recovery
-is corrected, but a terminal stop cannot bypass outcome coverage or imply an executable exit price.
+written once at their own readiness boundary. Raw provider verdicts and approved target indices are
+retained separately from individual market dispositions, so dual consensus applies its own later
+gate without rewriting either individual arm. Executed stop and per-target crossing facts retain
+exchange occurrence and receipt clocks. A terminal stop remains durable but cannot create a
+monetary outcome until quote/source/instrument coverage establishes an executable quote-side exit.
 
 The connected `paper-workflow` command consumes the stored normalized journal in indexed 500-event
 input batches, writes approved decisions before latency-adjusted eligible entry, and separately persists
@@ -54,8 +57,11 @@ Research and paper query indexed candidate-time quote/source windows in pages. E
 checked before evidence is loaded, input and candidate pages have explicit peaks, and completed
 paper candidate state is retired after durable outcome persistence. The 1,000/8,000 old-quote probes
 keep the same maximum active set (three), quote page (six rows) and outcome set. The separate
-two/eight-lifetime review nevertheless finds provider history retained in checkpoints and complete
-opportunity materialization before report/API paging. Those whole-workflow bounds remain open.
+two/eight-lifetime review found provider history retained in checkpoints and complete opportunity
+materialization before report/API paging. The correction indexes provider history durably, retires
+resolved working objects after dependent decisions persist, and performs opportunity selection,
+holdout filtering and page limits in SQLite before Pydantic model construction. Report metrics are
+single-pass and the selected-opportunity export is streamed in 200-record pages.
 
 The local-stream worker commits each event and cursor atomically and binds progress to source
 identity, generation and a consumed-prefix SHA-256.
@@ -70,6 +76,9 @@ trades per symbol and 2,000 candles per symbol/resolution and invokes the produc
 order transport.
 
 Candidates, four-arm decisions and their target/configuration identities are immutable records.
+Candidate creation and its deterministic `RULES_ONLY` decision commit in one transaction;
+identical retries repair an already matching candidate/initial-arm pair and conflicting payloads
+still fail.
 Phase 6 persists archived-provider decisions when their evidence becomes available, preserves
 their clocks/provenance and revalidates source state before entry. Quote and OHLC evaluation now
 require complete pre-entry and outcome paths. Ordinary aggregate, detail, API and export reads use
@@ -79,11 +88,10 @@ visible.
 `run-workflow` checkpoints manifest/config identities, the committed input offset, next evaluation
 clock, bounded trades/candles/books, source history, provider slots and pending scientific state.
 Fresh-process resumes skip the committed prefix and reject source/configuration drift. Output writes
-are immutable and the tested GPT/output checkpoint paths recover, but candidate persistence before
-its initial rules arm can strand a retry; that boundary needs an atomic or deterministic repair
-contract. The paper bridge reports warmup, partial, unresolved and complete states.
-Corrected contract versions explicitly refuse an old derived checkpoint rather than mixing old and
-new scientific identities; the lifecycle table/index migration is additive.
+are immutable and the tested candidate/rules, GPT and output checkpoint paths recover. The paper
+bridge reports warmup, partial, unresolved and complete states. Corrected contract versions
+explicitly refuse an old derived checkpoint rather than mixing old and new scientific identities;
+the lifecycle, target-crossing and provider-index tables are additive and retain old evidence.
 
 Manifest hashes commit to the canonical manifest preimage and ordered file identities. Experiment
 hashes commit to dataset, algorithm, engine/feature, target/revision, cost, schedule, partition,

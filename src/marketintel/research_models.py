@@ -188,7 +188,7 @@ class ExperimentConfig(BaseModel):
     holdout_start_utc: datetime | None = None
     embargo_seconds: int = Field(default=0, ge=0)
     code_commit: str = "UNRECORDED"
-    algorithm_version: str = "phase6-workflow-acceptance-shared-v3"
+    algorithm_version: str = "phase6-contract-corrections-shared-v4"
     engine_policy_version: str = "m3a-v2"
     feature_policy_version: str = "phase5-feature-state-v1"
     revision_selection_policy: Literal["LATEST_ELIGIBLE_BEFORE_OUTCOME"] = (
@@ -351,6 +351,8 @@ class ArmDecision(BaseModel):
     configuration_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     requested_model_id: str | None = Field(default=None, min_length=1)
     returned_model_id: str | None = Field(default=None, min_length=1)
+    raw_provider_verdict: Literal["CONFIRM", "REJECT", "WAIT"] | None = None
+    raw_supported_target_indices: tuple[int, ...] = ()
 
     @field_validator("ready_at_utc")
     @classmethod
@@ -363,6 +365,12 @@ class ArmDecision(BaseModel):
             _aware(self.provider_completed_at_utc, "provider_completed_at_utc")
         if self.provider_available_at_utc is not None:
             _aware(self.provider_available_at_utc, "provider_available_at_utc")
+        if len(set(self.raw_supported_target_indices)) != len(self.raw_supported_target_indices):
+            raise ValueError("Raw provider target identities must be unique")
+        if any(index < 1 for index in self.raw_supported_target_indices):
+            raise ValueError("Raw provider target identities are one-based")
+        if self.raw_provider_verdict is not None and self.provider not in {"GPT", "CLAUDE"}:
+            raise ValueError("Raw provider verdict belongs to an individual provider arm")
         return self
 
 
@@ -391,6 +399,31 @@ class ResearchLifecycleEvent(BaseModel):
             raise ValueError("Lifecycle evidence cannot be available before it occurred")
         if self.price is not None and (not self.price.is_finite() or self.price <= 0):
             raise ValueError("Lifecycle price must be finite and positive")
+        return self
+
+
+class ResearchTargetCrossing(BaseModel):
+    """Immutable executed target fact with separate exchange and receipt clocks."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    opportunity_id: str
+    revision_id: str
+    target_index: int = Field(ge=1)
+    event_id: str
+    occurred_at_utc: datetime
+    available_at_utc: datetime
+    source_event_id: str
+    price: Decimal = Field(gt=0)
+
+    @model_validator(mode="after")
+    def valid_times(self) -> ResearchTargetCrossing:
+        _aware(self.occurred_at_utc, "occurred_at_utc")
+        _aware(self.available_at_utc, "available_at_utc")
+        if self.available_at_utc < self.occurred_at_utc:
+            raise ValueError("Target-crossing evidence cannot be available before it occurred")
+        if not self.price.is_finite():
+            raise ValueError("Target-crossing price must be finite")
         return self
 
 

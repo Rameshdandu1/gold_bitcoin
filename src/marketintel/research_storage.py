@@ -19,6 +19,7 @@ from marketintel.research_models import (
     ResearchCandidate,
     ResearchLifecycleEvent,
     ResearchOutcome,
+    ResearchTargetCrossing,
 )
 
 
@@ -117,6 +118,37 @@ class ResearchStore:
                 CREATE INDEX IF NOT EXISTS research_lifecycle_available
                     ON research_lifecycle_events (
                         experiment_id, opportunity_id, revision_id, available_at_utc
+                    );
+                CREATE TABLE IF NOT EXISTS research_target_crossings (
+                    experiment_id TEXT NOT NULL,
+                    opportunity_id TEXT NOT NULL,
+                    revision_id TEXT NOT NULL,
+                    target_index INTEGER NOT NULL,
+                    event_id TEXT NOT NULL,
+                    available_at_utc TEXT NOT NULL,
+                    crossing_json TEXT NOT NULL,
+                    PRIMARY KEY (
+                        experiment_id, opportunity_id, revision_id, target_index, event_id
+                    ),
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
+                );
+                CREATE INDEX IF NOT EXISTS research_target_crossings_available
+                    ON research_target_crossings (
+                        experiment_id, opportunity_id, revision_id, available_at_utc, target_index
+                    );
+                CREATE TABLE IF NOT EXISTS research_provider_completions (
+                    experiment_id TEXT NOT NULL,
+                    opportunity_id TEXT NOT NULL,
+                    revision_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    available_at_utc TEXT NOT NULL,
+                    observation_json TEXT NOT NULL,
+                    PRIMARY KEY (experiment_id, opportunity_id, revision_id, provider),
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
+                );
+                CREATE INDEX IF NOT EXISTS research_provider_completions_available
+                    ON research_provider_completions (
+                        experiment_id, opportunity_id, revision_id, provider, available_at_utc
                     );
                 CREATE TABLE IF NOT EXISTS research_outcomes (
                     experiment_id TEXT NOT NULL,
@@ -429,8 +461,76 @@ class ResearchStore:
     ) -> list[dict]:
         limit = min(max(limit, 1), 200)
         offset = max(offset, 0)
-        rows = self.opportunities(experiment_id)
-        return [row.model_dump(mode="json") for row in rows[offset : offset + limit]]
+        experiment = self.experiment(experiment_id)
+        if experiment is None:
+            return []
+        _, config = experiment
+        clauses = ["experiment_id=?"]
+        values: list[object] = [experiment_id]
+        if config.holdout_start_utc is not None and not self.holdout_is_open(
+            experiment_id, config.canonical_config_hash()
+        ):
+            clauses.append(
+                "julianday(json_extract(record_json, '$.label_information_end_utc'))<julianday(?)"
+            )
+            values.append(config.holdout_start_utc.isoformat())
+        values.extend((limit, offset))
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "SELECT record_json FROM opportunities WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY json_extract(record_json, '$.observed_at_utc'), revision_id "
+                "LIMIT ? OFFSET ?",
+                values,
+            ).fetchall()
+        return [
+            OpportunityRecord.model_validate_json(row["record_json"]).model_dump(mode="json")
+            for row in rows
+        ]
+
+    def selected_opportunity_page(
+        self,
+        experiment_id: str,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+        include_protected: bool = False,
+    ) -> list[OpportunityRecord]:
+        """Page the latest visible revision per opportunity before model construction."""
+        if limit < 1 or offset < 0:
+            raise ValueError("Opportunity page offset/limit is invalid")
+        limit = min(limit, 500)
+        experiment = self.experiment(experiment_id)
+        if experiment is None:
+            return []
+        _, config = experiment
+        holdout_open = self.holdout_is_open(experiment_id, config.canonical_config_hash())
+        if include_protected and config.holdout_start_utc is not None and not holdout_open:
+            raise ValueError("Protected holdout has not been explicitly opened")
+        visible_clause = ""
+        values: list[object] = [experiment_id]
+        if config.holdout_start_utc is not None and not (include_protected or holdout_open):
+            visible_clause = (
+                "AND julianday(json_extract(record_json, '$.label_information_end_utc'))"
+                "<julianday(?) "
+            )
+            values.append(config.holdout_start_utc.isoformat())
+        values.extend((limit, offset))
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "WITH visible AS ("
+                "SELECT opportunity_id, revision_id, record_json, "
+                "json_extract(record_json, '$.observed_at_utc') AS observed_at_utc "
+                "FROM opportunities WHERE experiment_id=? " + visible_clause + "), ranked AS ("
+                "SELECT record_json, observed_at_utc, revision_id, "
+                "ROW_NUMBER() OVER (PARTITION BY opportunity_id "
+                "ORDER BY observed_at_utc DESC, revision_id DESC) AS revision_rank "
+                "FROM visible) "
+                "SELECT record_json FROM ranked WHERE revision_rank=1 "
+                "ORDER BY observed_at_utc, revision_id LIMIT ? OFFSET ?",
+                values,
+            ).fetchall()
+        return [OpportunityRecord.model_validate_json(row["record_json"]) for row in rows]
 
     def save_observations(self, experiment_id: str, observations: list[ReplayObservation]) -> None:
         with _connect(self.path) as db:
@@ -456,6 +556,64 @@ class ResearchStore:
                     ).fetchone()
                     if existing["observation_json"] != payload:
                         raise ValueError("Research observation identity is immutable")
+                if row.kind == "PROVIDER_COMPLETION":
+                    provider_values = (
+                        experiment_id,
+                        str(row.payload["candidate_id"]),
+                        str(row.payload["revision_id"]),
+                        str(row.payload["provider"]),
+                        row.available_at_utc.isoformat(),
+                        payload,
+                    )
+                    provider_cursor = db.execute(
+                        "INSERT OR IGNORE INTO research_provider_completions "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        provider_values,
+                    )
+                    if provider_cursor.rowcount == 0:
+                        provider_existing = db.execute(
+                            "SELECT observation_json FROM research_provider_completions "
+                            "WHERE experiment_id=? AND opportunity_id=? AND revision_id=? "
+                            "AND provider=?",
+                            provider_values[:4],
+                        ).fetchone()
+                        if provider_existing["observation_json"] != payload:
+                            raise ValueError("Provider completion identity is immutable")
+
+    def provider_completion_observation(
+        self,
+        experiment_id: str,
+        opportunity_id: str,
+        revision_id: str,
+        provider: str,
+        *,
+        through_utc: datetime | None = None,
+    ) -> ReplayObservation | None:
+        clauses = [
+            "experiment_id=?",
+            "opportunity_id=?",
+            "revision_id=?",
+            "provider=?",
+        ]
+        values: list[object] = [experiment_id, opportunity_id, revision_id, provider]
+        if through_utc is not None:
+            clauses.append("available_at_utc<=?")
+            values.append(through_utc.isoformat())
+        with _connect(self.path) as db:
+            row = db.execute(
+                "SELECT observation_json FROM research_provider_completions WHERE "
+                + " AND ".join(clauses),
+                values,
+            ).fetchone()
+        return ReplayObservation.model_validate_json(row["observation_json"]) if row else None
+
+    def provider_completion_count(self, experiment_id: str) -> int:
+        with _connect(self.path) as db:
+            row = db.execute(
+                "SELECT COUNT(*) AS count FROM research_provider_completions WHERE experiment_id=?",
+                (experiment_id,),
+            ).fetchone()
+        return int(row["count"])
 
     def observations(
         self,
@@ -576,6 +734,64 @@ class ResearchStore:
                     raise ValueError("Research candidate identity is immutable")
                 return False
         return True
+
+    def save_candidate_with_initial_decision(
+        self,
+        experiment_id: str,
+        candidate: ResearchCandidate,
+        decision: ArmDecision,
+        *,
+        persisted_at: datetime,
+    ) -> bool:
+        """Atomically expose a candidate and its deterministic RULES_ONLY decision."""
+        if decision.arm != "RULES_ONLY":
+            raise ValueError("Initial candidate decision must be RULES_ONLY")
+        candidate_payload = candidate.model_dump_json()
+        decision_payload = decision.model_dump_json()
+        with _connect(self.path) as db:
+            candidate_cursor = db.execute(
+                "INSERT OR IGNORE INTO research_candidates VALUES (?, ?, ?, ?, ?)",
+                (
+                    experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    candidate_payload,
+                    persisted_at.isoformat(),
+                ),
+            )
+            if candidate_cursor.rowcount == 0:
+                existing_candidate = db.execute(
+                    "SELECT candidate_json FROM research_candidates WHERE experiment_id=? "
+                    "AND opportunity_id=? AND revision_id=?",
+                    (experiment_id, candidate.opportunity_id, candidate.revision_id),
+                ).fetchone()
+                if existing_candidate["candidate_json"] != candidate_payload:
+                    raise ValueError("Research candidate identity is immutable")
+            decision_cursor = db.execute(
+                "INSERT OR IGNORE INTO arm_decisions VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    experiment_id,
+                    candidate.opportunity_id,
+                    candidate.revision_id,
+                    decision.arm,
+                    decision_payload,
+                    persisted_at.isoformat(),
+                ),
+            )
+            if decision_cursor.rowcount == 0:
+                existing_decision = db.execute(
+                    "SELECT decision_json FROM arm_decisions WHERE experiment_id=? "
+                    "AND opportunity_id=? AND revision_id=? AND arm=?",
+                    (
+                        experiment_id,
+                        candidate.opportunity_id,
+                        candidate.revision_id,
+                        decision.arm,
+                    ),
+                ).fetchone()
+                if existing_decision["decision_json"] != decision_payload:
+                    raise ValueError("Arm decision identity is immutable")
+        return candidate_cursor.rowcount == 1
 
     def candidates(self, experiment_id: str) -> list[ResearchCandidate]:
         with _connect(self.path) as db:
@@ -717,6 +933,60 @@ class ResearchStore:
                 return False
         return True
 
+    def save_target_crossing(self, experiment_id: str, crossing: ResearchTargetCrossing) -> bool:
+        payload = crossing.model_dump_json()
+        with _connect(self.path) as db:
+            cursor = db.execute(
+                "INSERT OR IGNORE INTO research_target_crossings VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    experiment_id,
+                    crossing.opportunity_id,
+                    crossing.revision_id,
+                    crossing.target_index,
+                    crossing.event_id,
+                    crossing.available_at_utc.isoformat(),
+                    payload,
+                ),
+            )
+            if cursor.rowcount == 0:
+                existing = db.execute(
+                    "SELECT crossing_json FROM research_target_crossings WHERE experiment_id=? "
+                    "AND opportunity_id=? AND revision_id=? AND target_index=? AND event_id=?",
+                    (
+                        experiment_id,
+                        crossing.opportunity_id,
+                        crossing.revision_id,
+                        crossing.target_index,
+                        crossing.event_id,
+                    ),
+                ).fetchone()
+                if existing["crossing_json"] != payload:
+                    raise ValueError("Research target-crossing identity is immutable")
+                return False
+        return True
+
+    def target_crossings(
+        self,
+        experiment_id: str,
+        opportunity_id: str,
+        revision_id: str,
+        *,
+        through_utc: datetime | None = None,
+    ) -> list[ResearchTargetCrossing]:
+        clauses = ["experiment_id=?", "opportunity_id=?", "revision_id=?"]
+        values: list[object] = [experiment_id, opportunity_id, revision_id]
+        if through_utc is not None:
+            clauses.append("available_at_utc<=?")
+            values.append(through_utc.isoformat())
+        with _connect(self.path) as db:
+            rows = db.execute(
+                "SELECT crossing_json FROM research_target_crossings WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY available_at_utc, target_index, event_id",
+                values,
+            ).fetchall()
+        return [ResearchTargetCrossing.model_validate_json(row["crossing_json"]) for row in rows]
+
     def lifecycle_events(
         self,
         experiment_id: str,
@@ -745,7 +1015,7 @@ class ResearchStore:
         revision_id: str,
         outcome: ResearchOutcome,
         *,
-        evaluation_version: str = "phase6-workflow-acceptance-outcome-v3",
+        evaluation_version: str = "phase6-contract-corrections-outcome-v4",
         persisted_at: datetime | None = None,
     ) -> bool:
         payload = outcome.model_dump_json()
