@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 
 The project uses four-part release versions for shipped milestones.
 
+## [0.6.1.0] - 2026-11-22
+
+### Added
+
+- Add immutable research lifecycle events, indexed candidate-window quote/source paging, bounded
+  active-candidate retirement, exact P6C-01/02/03 regressions and a reproducible allocation probe.
+
+### Changed
+
+- Retain only horizon-relevant unresolved paper candidates and their arm state in memory; page
+  historical candidates and retire terminal state after durable outcome persistence.
+
+### Fixed
+
+- Preserve individual provider decisions at their original evidence boundary and recheck dual
+  eligibility at the later provider readiness without weakening immutable-write conflicts.
+- Carry executed stop breaches through price recovery, distinguish pre-entry invalidation from a
+  post-entry stop, and share production/research stop and target-feasibility predicates.
+- Remove full-history quote materialization from normal research and paper processing while
+  preserving complete candidate-window source and outcome evidence.
+
+### Evidence and safety
+
+- Gold/BTC public workflows, recovery faults and 1,000/8,000-history allocation probes use only
+  synthetic fixtures. No live collection, paid model calls, real alerts, orders or deployment ran.
+- Destination Windows, live integrations and prospective observation remain external gates.
+
 ## [0.6.0.0] - 2026-11-22
 
 ### Added
@@ -14,8 +41,8 @@ The project uses four-part release versions for shipped milestones.
   derives simulated outcomes from later normalized observations for all six Gold/BTC engines.
 - Add additive Phase 6 dispatch evidence migration, versioned research outcomes, consumed-prefix
   paper progress and central holdout-aware read projections.
-- Add shared clock-injected production/research predicates, durable derived-workflow checkpoints
-  and 500-event public research/paper input pages.
+- Add one shared clock-injected production/research application policy, durable derived-workflow
+  checkpoints and bounded 500-event public research/paper processing.
 
 ### Fixed
 
@@ -37,12 +64,9 @@ The project uses four-part release versions for shipped milestones.
 - Verification uses zero-network `SYNTHETIC_FIXTURE` streams, archived fake provider rows and fake
   notification transports. Connected paper results are `SIMULATED_PROSPECTIVE`, not elapsed forward
   observation or empirical performance.
-- The independent closeout review verifies P6-01 through P6-05 and tested derived-workflow/paper
-  resume, but leaves P6C-01/02 application parity and P6C-03 whole-workflow memory open. An ordinary
-  later book can conflict with a frozen arm; research misses an executed terminal stop; quote
-  projection still loads full history. See `docs/audits/phase-6-closeout-independent-review.md`.
-- Licensed data, genuine provider access, destination Windows recovery and external soaks remain
-  unverified and follow software acceptance.
+- Shared-policy parity, complete derived-workflow checkpoint/resume and bounded public processing
+  are verified offline. Licensed data, genuine provider access, destination Windows recovery and
+  external soaks remain unverified.
 - Live ingestion, AI, alerts and paper collection stay disabled by default. Orders remain absent and
   `TRADING_ENABLED=true` remains refused.
 
