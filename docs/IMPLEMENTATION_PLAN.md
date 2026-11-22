@@ -154,14 +154,14 @@ observation, live integration soaks and destination-host recovery remain separat
 ## Phase 6 — evidence integrity and complete workflow acceptance
 
 Governing instructions: [CODEX_PHASE_6.md](../prompts/CODEX_PHASE_6.md).
-Current task: [CODEX_PHASE_6_CLOSEOUT.md](../prompts/CODEX_PHASE_6_CLOSEOUT.md).
+Completed closeout instructions: [CODEX_PHASE_6_CLOSEOUT.md](../prompts/CODEX_PHASE_6_CLOSEOUT.md).
 The checked items below record implementation delivery and original executed tests; independent
 acceptance is qualified by the [Phase 6 review](audits/phase-6-independent-review.md).
 
 - [x] **6A delivered:** advancing-clock authorization, cutoff-aligned token and typed zero-call
-  legacy quarantine. The book freshness deadline still needs P6-01 correction.
+  legacy quarantine, with the P6-01 book event-time freshness correction.
 - [x] **6B delivered:** availability/provenance fields, compatible evidence modes and versioned
-  outcomes. Conflicting payload clocks and remaining pre-entry path defects are P6-02/P6-03.
+  outcomes, including authoritative payload clocks and complete pre-entry coverage for P6-02/P6-03.
 - [x] **6C reviewed counterexamples:** cadence evaluation during silence, availability-time provider
   decisions, source-state gates and a public connected paper command deriving later outcomes.
 - [x] **6D:** atomic paper-event/cursor commits, consumed-prefix identity, duplicate-first recovery,
@@ -221,10 +221,10 @@ Duration alone does not establish an edge. Synthetic and retrospective records r
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
 - M3: implemented with a passing fixture baseline; legacy upgrade and original clock cases are
-  corrected, while authorization freshness and full shared policy remain in closeout. Live provider/model entitlement,
-  paid-call behavior, Slack delivery,
+  corrected, and the closeout verifies authorization freshness and shared policy. Live
+  provider/model entitlement, paid-call behavior, Slack delivery,
   Windows installation and extended market soak remain separate operator acceptance gates.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
-- M5 software acceptance remains open until the six-engine workflow, outcome evaluator, partitions,
-  paper chronology/recovery and operator surfaces satisfy Phase 6 on immutable hypothetical
-  evidence. M5 empirical readiness additionally requires real licensed and prospective evidence.
+- M5 offline software acceptance is closed by the six-engine workflow, outcome evaluator,
+  partition/holdout controls, paper chronology/recovery and operator surfaces verified on immutable
+  hypothetical evidence. M5 empirical readiness still requires real licensed and prospective evidence.
