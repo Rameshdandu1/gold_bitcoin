@@ -155,9 +155,11 @@ observation, live integration soaks and destination-host recovery remain separat
 
 Governing instructions: [CODEX_PHASE_6.md](../prompts/CODEX_PHASE_6.md).
 Original closeout instructions: [CODEX_PHASE_6_CLOSEOUT.md](../prompts/CODEX_PHASE_6_CLOSEOUT.md).
-Current corrective task: [CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md](../prompts/CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md).
+Previous workflow task: [CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md](../prompts/CODEX_PHASE_6_WORKFLOW_ACCEPTANCE.md).
+Current corrective task: [CODEX_PHASE_6_CONTRACT_CORRECTIONS.md](../prompts/CODEX_PHASE_6_CONTRACT_CORRECTIONS.md).
 The checked items below record implementation delivery and original executed tests; independent
-acceptance is qualified by the [independent closeout review](audits/phase-6-closeout-independent-review.md).
+acceptance is qualified by the latest
+[independent workflow-acceptance review](audits/phase-6-workflow-acceptance-independent-review.md).
 
 - [x] **6A delivered:** advancing-clock authorization, cutoff-aligned token and typed zero-call
   legacy quarantine, with the P6-01 book event-time freshness correction.
@@ -175,13 +177,17 @@ acceptance is qualified by the [independent closeout review](audits/phase-6-clos
   explicit unavailable/expired terminal arms and truthful bounded progress.
 - [x] **Tested resume:** derived warmup/provider checkpoints and fresh-process paper continuation
   match uninterrupted synthetic controls.
-- [x] **Phase 6 offline acceptance:** P6C-01 contemporaneous decisions through later books,
-  P6C-02 actual application/lifecycle parity and P6C-03 measured whole-workflow memory bounds.
+- [x] **Exact P6C controls corrected:** later unchanged books, post-observation executed-stop
+  recovery and irrelevant pre-candidate quote loading pass their original reproductions.
+- [ ] **Phase 6 offline acceptance:** P6W-01 candidate/rules recovery, P6W-02 event-time bounds,
+  P6W-03 target history, P6W-04 independent dual gating, P6W-05 outcome coverage and P6W-06
+  completed provider/output bounds remain open.
 
 The reviewed 251-test baseline and original regressions remain preserved. The later corrective
 matrix adds unchanged-book, terminal executed-stop, recovery/fault and two-length bounded-resource
-regressions. Destination Windows recovery, licensed live data, genuine provider outputs and elapsed
-observation remain subsequent operational or empirical gates.
+regressions. Review at `e9f419f5ef576ec957f9d59107ab3f7f06815b23` passes 260 tests and reproduces six
+additional contract failures. Destination Windows recovery, licensed live data, genuine provider
+outputs and elapsed observation remain subsequent operational or empirical gates.
 
 ### Phase 6 closeout — fixed remaining software scope
 
@@ -189,19 +195,23 @@ observation remain subsequent operational or empirical gates.
   P6-03 anchored quote-gap and incomplete pre-entry OHLC coverage corrections.
 - [x] **Closeout B:** P6-04 holdout protection through paper derivation/reads and P6-05 legal
   missing/expired-provider dispositions plus truthful bounded-progress/completion states.
-- [x] **Closeout C:** preserve the verified derived-state resume mechanism; correct P6C-01/02 and
-  establish the finite application parity matrix, then correct P6C-03 and measure whole-workflow
-  bounds.
+- [ ] **Closeout C acceptance:** preserve the corrected P6C cases and verified resume paths; close
+  P6W-01 through P6W-06 using the finite contract-correction matrix. Shared helper functions and a
+  bounded quote page do not establish all caller facts, persistence boundaries or output bounds.
 - [x] **Closeout D evidence delivered:** original regression/public-command results, migrations,
   Gold/BTC checksums and Windows CI are recorded. The later independent review qualifies the
   implementation report's original full-acceptance claim; the later workflow-acceptance report
-  records the corrective evidence and remaining external gates.
+  records its corrective evidence. The independent workflow-acceptance review preserves those
+  results while qualifying complete software acceptance.
 
-The remaining work is operational/evidence validation and adds no feature-development phase.
-Reviewed main `81f86f79cb943c8cb837aae4f800135948f89f32` passed 251 tests; the corrective branch preserves
-that progress and completes the finite parity/recovery/resource matrix.
+The remaining software work completes six contracts within the existing phase; it adds no strategy
+or provider feature. The current reviewed baseline passes 260 tests. Complete the specified
+corrections, then proceed to operational/evidence validation.
 
 ## Next operational stage — controlled Windows and live integration validation
+
+Detailed next-stage instructions: [CODEX_OPERATIONAL_VALIDATION.md](../prompts/CODEX_OPERATIONAL_VALIDATION.md).
+Its offline command pack and prerequisite/evidence worksheet can be prepared during correction.
 
 - [ ] Validate actual destination Windows startup, service identity, paths/ACLs, reboot and restore.
 - [ ] Verify bounded Delta collection/discovery, source freshness, reconciliation and reconnect.
@@ -229,12 +239,12 @@ Duration alone does not establish an edge. Synthetic and retrospective records r
 - M1: connected market status is accurate; missing symbols/stream gaps show unavailable; replayable closed candles.
 - M2: six engines emit deterministic, non-overlapping events with reasons/invalidation; no fake forecasts.
 - M3: implemented with a passing fixture baseline; legacy upgrade and original clock cases are
-  corrected, and the closeout verifies authorization freshness and the finite shared application
-  parity matrix. Live
+  corrected, and authorization freshness controls pass. Equivalent research market facts and dual
+  boundary behavior still require the listed P6W corrections. Live
   provider/model entitlement, paid-call behavior, Slack delivery,
   Windows installation and extended market soak remain separate operator acceptance gates.
 - M4: measurable net-of-cost research outcomes on unseen data; dashboard reflects actual results, never estimated success percentages.
-- M5 offline software acceptance passes the finite P6C-01/02/03 matrix. The six-engine positive
-  workflow, corrected outcome/holdout contracts and tested paper chronology/recovery pass on
-  immutable hypothetical evidence. M5 empirical readiness still requires real licensed and
-  prospective evidence.
+- M5 offline software acceptance remains open for P6W-01 through P6W-06. The six-engine positive
+  workflow and original exact regressions pass on hypothetical evidence; the new review identifies
+  the remaining finite contracts. M5 empirical readiness still requires licensed and prospective
+  evidence after operational acceptance.

@@ -3,6 +3,13 @@
 Verification date: 2026-11-22 (Asia/Kolkata). Application and fixture clocks are UTC. All prices,
 provider rows and outcomes in this report are synthetic software evidence, not observed performance.
 
+**Later independent disposition:** The
+[independent workflow-acceptance review](phase-6-workflow-acceptance-independent-review.md) at merged
+`e9f419f5ef576ec957f9d59107ab3f7f06815b23` preserves this report's executed cases and confirms the
+original corrections. It also reproduces P6W-01 through P6W-06 in recovery, event/target facts, dual
+gating, outcome coverage and whole-workflow state/output bounds. This report remains historical
+implementation evidence; its complete-acceptance statements are qualified by that later review.
+
 ## Scope and identities
 
 - Starting code: `81f86f79cb943c8cb837aae4f800135948f89f32`.

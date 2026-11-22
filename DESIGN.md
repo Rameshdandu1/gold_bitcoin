@@ -1,6 +1,6 @@
 # DESIGN.md — Dual AI Market Intelligence Architecture
 
-**Status**: v0.6 implementation / Phase 6 offline workflow acceptance complete; external validation follows. **Scope**: deterministic analysis plus opt-in dual-AI
+**Status**: v0.6 implementation / Phase 6 contract corrections pending; external validation follows. **Scope**: deterministic analysis plus opt-in dual-AI
 review and Slack alerts; all external paths are disabled by default and order execution is absent. **Deployment**: native Windows Server
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
@@ -13,8 +13,10 @@ findings and acceptance gaps. Their offline disposition is recorded in the
 [independent closeout review](docs/audits/phase-6-closeout-independent-review.md) verifies all five
 exact corrections and tested resume paths. The later
 [workflow acceptance verification](docs/audits/phase-6-workflow-acceptance-verification.md) records
-the P6C-01/02/03 corrections and bounded two-length resource evidence. Routine live operation still
-requires the separately documented external validation gates.
+the exact P6C-01/02/03 corrections and two-length resource evidence. The
+[independent workflow-acceptance review](docs/audits/phase-6-workflow-acceptance-independent-review.md)
+confirms those controls but reproduces P6W-01 through P6W-06 in the existing recovery/parity/resource
+contracts. Routine live operation follows those corrections and the external validation gates.
 
 The alert worker refreshes its clock at each risk attempt and again inside the short dispatch
 authorization transaction. The eligibility token and evaluated trade set use the same receive-time
@@ -33,10 +35,11 @@ expiry, including complete pre-entry intervals.
 The scheduler evaluates every frozen cadence even during input silence. Source transitions are
 applied at their availability time to provider readiness and outcome eligibility. Production
 consensus and connected research reuse clock-injected predicates for revision, lifecycle, expiry,
-source, stop, spread, entry drift and current target economics. Individual provider decisions are
-written once at their own readiness boundary; the dual arm combines those persisted decisions and
-rechecks the later boundary. Executed-trade lifecycle events are additive terminal facts, so price
-recovery cannot reopen a stopped candidate or create a later paper entry.
+source, stop, spread, entry drift and current target economics. Individual arm decisions are
+written once at their own readiness boundary. The current dual constructor incorrectly inherits
+earlier individual market WAIT states; provider verdicts need separate representation. Research
+also needs equivalent event-time bounds and executed target history. Post-observation stop/recovery
+is corrected, but a terminal stop cannot bypass outcome coverage or imply an executable exit price.
 
 The connected `paper-workflow` command consumes the stored normalized journal in indexed 500-event
 input batches, writes approved decisions before latency-adjusted eligible entry, and separately persists
@@ -49,9 +52,10 @@ scoped projections.
 
 Research and paper query indexed candidate-time quote/source windows in pages. Eligibility is
 checked before evidence is loaded, input and candidate pages have explicit peaks, and completed
-candidate state is retired after durable outcome persistence. The 1,000/8,000-history probes keep
-the same maximum active set (three), quote page (six rows) and candidate outcome set without a
-silent evidence cap.
+paper candidate state is retired after durable outcome persistence. The 1,000/8,000 old-quote probes
+keep the same maximum active set (three), quote page (six rows) and outcome set. The separate
+two/eight-lifetime review nevertheless finds provider history retained in checkpoints and complete
+opportunity materialization before report/API paging. Those whole-workflow bounds remain open.
 
 The local-stream worker commits each event and cursor atomically and binds progress to source
 identity, generation and a consumed-prefix SHA-256.
@@ -75,8 +79,9 @@ visible.
 `run-workflow` checkpoints manifest/config identities, the committed input offset, next evaluation
 clock, bounded trades/candles/books, source history, provider slots and pending scientific state.
 Fresh-process resumes skip the committed prefix and reject source/configuration drift. Output writes
-are immutable, so a fault before checkpoint advancement safely replays the current batch. The paper
-bridge uses the same retry-safe pattern and reports warmup, partial, unresolved and complete states.
+are immutable and the tested GPT/output checkpoint paths recover, but candidate persistence before
+its initial rules arm can strand a retry; that boundary needs an atomic or deterministic repair
+contract. The paper bridge reports warmup, partial, unresolved and complete states.
 Corrected contract versions explicitly refuse an old derived checkpoint rather than mixing old and
 new scientific identities; the lifecycle table/index migration is additive.
 

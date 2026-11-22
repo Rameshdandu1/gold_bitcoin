@@ -3,34 +3,40 @@
 > Repository: https://github.com/Rameshdandu1/gold_bitcoin  
 > Project: Dual AI Market Intelligence (Delta Exchange India + CoinGlass + GPT + Claude)  
 > Platform: Native Windows Server 2022/2025, PowerShell 7, Python 3.12+, React/TypeScript.  
-> Status: Research-only starter, **not live-trading ready**.
+> Status: Research-only application; Phase 6 contract corrections pending, **not live-trading ready**.
 
 ## COPY/PASTE THIS AS THE FIRST MESSAGE IN CODEX
 
-You are the **principal architect, senior Python/TypeScript engineer, reliability engineer and test lead** for my GitHub repository:
+Work in https://github.com/Rameshdandu1/gold_bitcoin. Inspect the current repository and preserve
+unrelated changes. Read `AGENTS.md`, `DESIGN.md`, `README.md`, `docs/IMPLEMENTATION_PLAN.md`, then
+`prompts/CODEX_TASK.md` and the current review/task documents.
 
-https://github.com/Rameshdandu1/gold_bitcoin
+The current task is **`prompts/CODEX_PHASE_6_CONTRACT_CORRECTIONS.md`**, with evidence in
+`docs/audits/phase-6-workflow-acceptance-independent-review.md`. Reviewed baseline:
+`e9f419f5ef576ec957f9d59107ab3f7f06815b23`, merged PR #15, 260 passing Python tests. Fetch current
+main and compare newer changes before treating any finding as open. If these documents have not
+merged, fetch `docs/phase-6-acceptance-review` and read the exact files from that branch.
 
-I want you to **inspect the existing repository first, then implement it milestone by milestone**. Do not start by replacing the existing project, inventing a new architecture, or claiming that demo scaffolding is production-ready.
+Create `fix/phase-6-contract-corrections` (or a suitable unused suffix), reproduce the six listed
+failures with meaningful tests, and implement the finite packages. Preserve the working original
+later-book, stop/recovery, quote-window and checkpoint controls. Update evidence/status documentation
+and open a reviewable PR; do not auto-merge or deploy.
 
-**MANDATORY FIRST ACTIONS**
-1. Open the repository, inspect `git status`, current branch, last commit and file tree. Preserve uncommitted user changes; never force-push, reset, discard, or overwrite them.
-2. Read these files **in this order**: `AGENTS.md`, `DESIGN.md`, `README.md`, `docs/IMPLEMENTATION_PLAN.md`, `prompts/CODEX_TASK.md`, then the relevant source and tests. Treat `AGENTS.md` as the development policy.
-3. Perform a **codebase audit** of what is implemented, partially implemented, mocked and missing. Inspect Delta REST/WebSocket adapters, CoinGlass connector, feature engines, AI adapters, consensus/risk gate, audit storage, API, React frontend and GitHub Actions. Do not assume an integration works just because the code exists.
-4. Run the current baseline quality checks where dependencies permit: `python -m pytest -q`, `python -m ruff check .`, `python -m ruff format --check .`, `python -m compileall -q src`, then `npm run typecheck` and `npm run build` in `frontend/`. Install declared dependencies if network access permits; report exactly what could not run. Record a concise baseline report.
-5. Create a new task branch named `feature/delta-market-data-integrity` (or a suitable unused suffix). Avoid pushing directly to `main` without explicit direction.
-6. **Start with Phase 1 only:** make Delta Exchange India market-data collection trustworthy, replayable and verifiably correct. Follow `docs/IMPLEMENTATION_PLAN.md` tasks 1–6, beginning with a thin, complete, tested vertical slice. Inspect the official Delta documentation before implementing or changing network protocols.
-7. Before code changes, provide a short plan with changed modules, contract fixtures, acceptance tests, expected operational risks and dependencies. Then implement; do not stop after planning.
-8. After each self-contained slice: add positive/negative tests, run the relevant checks, update docs and environment examples, commit to the feature branch, and summarize exact modified files and test outcomes. Push the feature branch / create a PR if GitHub authentication and permissions allow; do not merge automatically.
-9. Never add real trading, live order placement, exchange trading API keys, unattended options execution or leverage control. `TRADING_ENABLED` remains false and attempts to enable it must be rejected. Analysis and read-only alerts only.
-10. Never invent market prices, live connection successes, signal hit rates, API entitlements, unit conversions, or test outcomes. If external keys, network, data or Windows Server access are unavailable, use documented fixtures for tests, preserve the integration as unverified and list the exact validation steps.
+Prepare the existing next stage from `prompts/CODEX_OPERATIONAL_VALIDATION.md` offline. Keep live
+ingestion, AI, alerts and real paper collection disabled by default; trading remains refused. No
+new strategies, data vendors, options, order paths or notification channels belong to this task.
+Do not restart the delivered Phase 1 work described in the historical roadmap below.
 
-**Initial milestone completion report**
-Provide: (a) baseline and findings with severity, (b) implemented tasks, (c) tests and commands executed with results, (d) unverified integrations and blocked items, (e) commit and PR link if created, and (f) next recommended task. Do not claim M1 complete until the acceptance criteria actually pass.
+Report actual code changes, commands/results, exact SHAs, remaining unverified integrations and the
+next operator prerequisite. Missing server access or paid credentials does not block the offline
+corrective PR and operational preparation. Never fabricate external success or ask for secrets in chat.
 
 ---
 
-## PRODUCT REQUIREMENTS — ALL FUTURE MILESTONES
+## Historical product roadmap reference
+
+These original requirements describe the longer-term product. The current implementation plan and
+task above govern immediate scope; roadmap items are not proof of an implemented integration.
 
 ### A. Assets and horizons
 
@@ -179,7 +185,7 @@ Walk-forward replay, paper-trading reports, P&L costs, LLM-vs-rules comparison a
 ### Beyond MVP — options and execution
 Read-only options evaluation may be added **after** the core signal research works. Automated orders require separate authorization and independent security/risk design; do not implement them on this task.
 
-## FIRST PR — EXACT SCOPE
+## Historical first PR — delivered foundation, not the current task
 
 Name: **feat: establish reliable Delta public market-data foundation**
 
@@ -203,4 +209,5 @@ Deliver in one or more small commits:
 5. **Git:** branch name, commit SHA, PR URL (only if actually created).
 6. **Next step:** one concrete slice from the implementation plan.
 
-**Start now with the repository audit and Milestone M1. Do not wait for further confirmation unless blocked by missing credentials/permissions required for a requested external write. Do not expose or request secrets in chat.**
+**Start with the current contract-correction task above. Finish authorized offline work before
+reporting the precise prerequisites for subsequent external validation. Do not expose secrets.**
