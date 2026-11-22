@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 The project uses four-part release versions for shipped milestones.
 
+## Unreleased — independent workflow-acceptance review
+
+- Verify merged PR #15 against the 260-test baseline, Gold/BTC public workflows, original exact
+  corrections and hosted Windows CI; preserve those improvements and historical measurements.
+- Record six remaining contract groups: candidate/rules recovery, late event-time invalidation,
+  executed target history, independent dual gating, stop outcome coverage and historical
+  provider/output materialization. No application correction is claimed by this documentation change.
+- Add a finite Codex correction task and the subsequent Windows/live/prospective validation brief;
+  align current status and coding-agent entry points. No feature flags, source or dependencies change.
+
 ## [0.6.1.0] - 2026-11-22
 
 ### Added
