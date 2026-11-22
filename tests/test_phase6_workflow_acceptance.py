@@ -452,10 +452,10 @@ def test_p6c_02_bearish_stop_after_entry_is_not_erased_by_recovery() -> None:
     )
 
     assert outcome.code == "STOP_BEFORE_TARGET"
-    assert outcome.reason == "EXECUTED_STOP_BREACH_AFTER_ENTRY"
+    assert outcome.reason == "EXECUTED_STOP_WITH_EXECUTABLE_QUOTE"
     assert outcome.entry_at_utc == FIXTURE_NOW
-    assert outcome.exit_at_utc == FIXTURE_NOW + timedelta(seconds=1)
-    assert outcome.exit_price == Decimal("106")
+    assert outcome.exit_at_utc == FIXTURE_NOW + timedelta(seconds=2)
+    assert outcome.exit_price == Decimal("100")
 
 
 def _older_quotes(count: int) -> tuple[ReplayObservation, ...]:

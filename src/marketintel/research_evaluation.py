@@ -19,6 +19,7 @@ from marketintel.research_models import (
     ResearchCandidate,
     ResearchLifecycleEvent,
     ResearchOutcome,
+    ResearchTargetCrossing,
 )
 
 
@@ -115,6 +116,7 @@ def evaluate_quotes(
     entry_latency_ms: int = 0,
     source_transitions: Iterable[tuple[datetime, str | object]] = (),
     lifecycle_events: Iterable[ResearchLifecycleEvent] = (),
+    target_crossings: Iterable[ResearchTargetCrossing] = (),
     evaluated_through_utc: datetime | None = None,
 ) -> ResearchOutcome:
     """Evaluate against ordered executable quotes using each arm's real ready time."""
@@ -176,6 +178,15 @@ def evaluate_quotes(
             for row in lifecycle_events
             if row.to_state == "INVALIDATED"
             and row.price_source == "EXECUTED_TRADE"
+            and candidate.observed_at_utc <= row.available_at_utc <= candidate.expires_at_utc
+        ),
+        key=lambda row: (row.available_at_utc, row.event_id),
+    )
+    executed_target_crossings = sorted(
+        (
+            row
+            for row in target_crossings
+            if row.target_index == target_index
             and candidate.observed_at_utc <= row.available_at_utc <= candidate.expires_at_utc
         ),
         key=lambda row: (row.available_at_utc, row.event_id),
@@ -248,6 +259,19 @@ def evaluate_quotes(
         )
     first = entry_quotes[0]
     first_at = _quote_available_at(first)
+    pre_entry_target = next(
+        (row for row in executed_target_crossings if row.available_at_utc <= first_at), None
+    )
+    if pre_entry_target is not None:
+        return _outcome(
+            candidate,
+            decision,
+            target_index,
+            "NO_ENTRY",
+            "EXECUTED_TARGET_CROSSING_BEFORE_ENTRY",
+            events=(pre_entry_target.source_event_id, pre_entry_target.event_id),
+            complete=True,
+        )
     pre_entry_breach = next(
         (row for row in executed_breaches if row.available_at_utc <= first_at), None
     )
@@ -351,22 +375,68 @@ def evaluate_quotes(
                     favorable_excursion=favorable,
                     adverse_excursion=adverse,
                 )
-            raw_exit = breach.price or candidate.invalidation
+            breach_at = breach.available_at_utc
+            path_incomplete = (
+                source_interrupted(quote_at)
+                or (breach_at - previous_at).total_seconds() > policy.maximum_quote_gap_seconds
+                or (quote_at - breach_at).total_seconds() > policy.maximum_quote_gap_seconds
+                or not (
+                    instrument.valid_from_utc <= breach_at
+                    and instrument.valid_from_utc <= quote_at
+                    and (
+                        instrument.valid_to_utc is None
+                        or (
+                            breach_at < instrument.valid_to_utc
+                            and quote_at < instrument.valid_to_utc
+                        )
+                    )
+                )
+            )
+            if path_incomplete:
+                return _outcome(
+                    candidate,
+                    decision,
+                    target_index,
+                    "INCOMPLETE",
+                    "EXECUTED_STOP_WITH_INCOMPLETE_QUOTE_PATH",
+                    events=tuple(
+                        value
+                        for value in (
+                            first.event_id,
+                            previous.event_id,
+                            breach.source_event_id,
+                            breach.event_id,
+                            quote.event_id,
+                        )
+                        if value is not None
+                    ),
+                    complete=False,
+                    entry_at=first_at,
+                    entry=entry,
+                    favorable_excursion=favorable,
+                    adverse_excursion=adverse,
+                )
+            raw_exit = quote.bid if candidate.direction == "BULLISH" else quote.ask
             exit_fill = _exit_fill(candidate, raw_exit, policy, instrument.tick_size)
             return _outcome(
                 candidate,
                 decision,
                 target_index,
                 "STOP_BEFORE_TARGET",
-                "EXECUTED_STOP_BREACH_AFTER_ENTRY",
+                "EXECUTED_STOP_WITH_EXECUTABLE_QUOTE",
                 events=tuple(
                     value
-                    for value in (first.event_id, breach.source_event_id, breach.event_id)
+                    for value in (
+                        first.event_id,
+                        breach.source_event_id,
+                        breach.event_id,
+                        quote.event_id,
+                    )
                     if value is not None
                 ),
                 complete=True,
                 entry_at=first_at,
-                exit_at=breach.available_at_utc,
+                exit_at=quote_at,
                 entry=entry,
                 exit=exit_fill,
                 policy=policy,
@@ -709,93 +779,107 @@ def purged_folds(
 
 def arm_metrics(opportunities: Iterable[OpportunityRecord]) -> dict[str, dict]:
     """Preserve abstention denominators and mark small samples insufficient."""
-    by_arm: dict[str, list[ArmRecord]] = defaultdict(list)
+    aggregates: dict[str, dict] = defaultdict(
+        lambda: {
+            "observed": 0,
+            "unavailable": 0,
+            "rejected_or_wait": 0,
+            "known_no_position": 0,
+            "unresolved": 0,
+            "approved": 0,
+            "executable": 0,
+            "complete": 0,
+            "latency": 0,
+            "cost_microusd": 0,
+            "net": Decimal(0),
+            "operational": Decimal(0),
+            "gains": Decimal(0),
+            "losses": Decimal(0),
+            "favorable": Decimal(0),
+            "adverse": Decimal(0),
+            "target": 0,
+            "stop": 0,
+            "time": 0,
+            "ambiguous": 0,
+            "incomplete": 0,
+        }
+    )
     total = 0
     for opportunity in opportunities:
         total += 1
         for arm in opportunity.arms:
-            by_arm[arm.arm].append(arm)
+            item = aggregates[arm.arm]
+            outcome = arm.outcome
+            known_abstention = arm.state in {"REJECTED", "WAIT", "NO_ENTRY"} and (
+                outcome is None or outcome.code == "NO_ENTRY"
+            )
+            complete = bool(
+                outcome is not None and outcome.data_complete and outcome.net_pnl is not None
+            )
+            item["observed"] += 1
+            item["unavailable"] += arm.state == "UNAVAILABLE"
+            item["rejected_or_wait"] += arm.state in {"REJECTED", "WAIT"}
+            item["known_no_position"] += known_abstention
+            item["unresolved"] += (
+                arm.state != "UNAVAILABLE"
+                and not known_abstention
+                and (outcome is None or not outcome.data_complete)
+            )
+            item["approved"] += arm.state in {"APPROVED", "NO_ENTRY", "EXECUTABLE"}
+            item["executable"] += arm.state == "EXECUTABLE"
+            item["latency"] += arm.provider_latency_ms
+            item["cost_microusd"] += arm.attributable_cost_microusd
+            if outcome is not None:
+                item["target"] += outcome.code == "TARGET_BEFORE_STOP"
+                item["stop"] += outcome.code == "STOP_BEFORE_TARGET"
+                item["time"] += outcome.code == "TIME_EXIT"
+                item["ambiguous"] += outcome.code == "AMBIGUOUS"
+                item["incomplete"] += outcome.code == "INCOMPLETE"
+            if complete:
+                item["complete"] += 1
+                item["net"] += outcome.net_pnl
+                item["favorable"] += outcome.favorable_excursion or Decimal(0)
+                item["adverse"] += outcome.adverse_excursion or Decimal(0)
+                if outcome.net_pnl > 0:
+                    item["gains"] += outcome.net_pnl
+                elif outcome.net_pnl < 0:
+                    item["losses"] -= outcome.net_pnl
+            if complete or known_abstention:
+                item["operational"] -= Decimal(arm.attributable_cost_microusd) / Decimal(1_000_000)
+            if complete:
+                item["operational"] += outcome.net_pnl
     result: dict[str, dict] = {}
-    for arm, records in sorted(by_arm.items()):
-        outcomes = [row.outcome for row in records if row.outcome is not None]
-        complete_records = [
-            row
-            for row in records
-            if row.outcome is not None
-            and row.outcome.data_complete
-            and row.outcome.net_pnl is not None
-        ]
-        complete = [row.outcome for row in complete_records if row.outcome is not None]
-        gains = sum((row.net_pnl for row in complete if row.net_pnl > 0), Decimal(0))
-        losses = -sum((row.net_pnl for row in complete if row.net_pnl < 0), Decimal(0))
-        known_abstentions = [
-            row
-            for row in records
-            if row.state in {"REJECTED", "WAIT", "NO_ENTRY"}
-            and (row.outcome is None or row.outcome.code == "NO_ENTRY")
-        ]
-        unresolved = [
-            row
-            for row in records
-            if row.state != "UNAVAILABLE"
-            and row not in known_abstentions
-            and (row.outcome is None or not row.outcome.data_complete)
-        ]
-        model_cost = sum(
-            (Decimal(row.attributable_cost_microusd) / Decimal(1_000_000) for row in records),
-            Decimal(0),
-        )
-        operational_pnl = sum((row.net_pnl for row in complete), Decimal(0)) - sum(
-            (
-                Decimal(row.attributable_cost_microusd) / Decimal(1_000_000)
-                for row in complete_records + known_abstentions
-            ),
-            Decimal(0),
-        )
+    for arm, item in sorted(aggregates.items()):
+        complete_count = item["complete"]
+        model_cost = Decimal(item["cost_microusd"]) / Decimal(1_000_000)
         result[arm] = {
             "opportunity_denominator": total,
-            "observed_records": len(records),
-            "unavailable": sum(row.state == "UNAVAILABLE" for row in records),
-            "rejected_or_wait": sum(row.state in {"REJECTED", "WAIT"} for row in records),
-            "known_no_position": len(known_abstentions),
-            "unresolved": len(unresolved),
-            "approved": sum(row.state in {"APPROVED", "NO_ENTRY", "EXECUTABLE"} for row in records),
-            "executable": sum(row.state == "EXECUTABLE" for row in records),
-            "complete_executions": len(complete),
-            "latency_ms_total": sum(row.provider_latency_ms for row in records),
-            "attributable_cost_microusd": sum(row.attributable_cost_microusd for row in records),
-            "net_pnl": str(sum((row.net_pnl for row in complete), Decimal(0))),
-            "operational_net_pnl_after_attributable_ai_cost": str(operational_pnl),
+            "observed_records": item["observed"],
+            "unavailable": item["unavailable"],
+            "rejected_or_wait": item["rejected_or_wait"],
+            "known_no_position": item["known_no_position"],
+            "unresolved": item["unresolved"],
+            "approved": item["approved"],
+            "executable": item["executable"],
+            "complete_executions": complete_count,
+            "latency_ms_total": item["latency"],
+            "attributable_cost_microusd": item["cost_microusd"],
+            "net_pnl": str(item["net"]),
+            "operational_net_pnl_after_attributable_ai_cost": str(item["operational"]),
             "attributable_ai_cost_usd": str(model_cost),
-            "target_before_stop": sum(row.code == "TARGET_BEFORE_STOP" for row in outcomes),
-            "stop_before_target": sum(row.code == "STOP_BEFORE_TARGET" for row in outcomes),
-            "time_exit": sum(row.code == "TIME_EXIT" for row in outcomes),
-            "ambiguous": sum(row.code == "AMBIGUOUS" for row in outcomes),
-            "incomplete": sum(row.code == "INCOMPLETE" for row in outcomes),
+            "target_before_stop": item["target"],
+            "stop_before_target": item["stop"],
+            "time_exit": item["time"],
+            "ambiguous": item["ambiguous"],
+            "incomplete": item["incomplete"],
             "mean_favorable_excursion": (
-                str(
-                    sum(
-                        (row.favorable_excursion or Decimal(0) for row in complete),
-                        Decimal(0),
-                    )
-                    / len(complete)
-                )
-                if complete
-                else None
+                str(item["favorable"] / complete_count) if complete_count else None
             ),
             "mean_adverse_excursion": (
-                str(
-                    sum(
-                        (row.adverse_excursion or Decimal(0) for row in complete),
-                        Decimal(0),
-                    )
-                    / len(complete)
-                )
-                if complete
-                else None
+                str(item["adverse"] / complete_count) if complete_count else None
             ),
-            "profit_factor": str(gains / losses) if losses > 0 else None,
-            "classification": "EXPLORATORY" if len(complete) >= 30 else "INSUFFICIENT_DATA",
+            "profit_factor": (str(item["gains"] / item["losses"]) if item["losses"] > 0 else None),
+            "classification": "EXPLORATORY" if complete_count >= 30 else "INSUFFICIENT_DATA",
             "warning": "Hypothetical research output; not a probability or profitability claim.",
         }
     return result
