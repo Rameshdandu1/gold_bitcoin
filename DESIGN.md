@@ -230,10 +230,34 @@ cannot be enabled. Exchange data, retrieved reference data and LLM output are un
 Discover active option products, strikes/expiries, full bid/ask, IV/Greeks; independently compute delta exposure, decay, expected value and worst-case spread/slippage. Validate premium economics before ranking CALL/PUT instruments. Distinguish underlying signal from options order.
 
 ### Operator-visible dashboard
-Six-card grid, market observation and source/worker freshness, exact provider attempts/models,
-disagreements and spend, current candidate lifecycle and historical decision. Show `WAIT` by
-default. Do not display unmeasured performance or calibrated-looking confidence. UI never invents
-live market data.
+The React/TypeScript interface uses five read-only views: Overview, Liquidity sweeps,
+AI reviews, Research and System health. Gold/BTC selection scopes three horizon
+cards and the candidate journal. The responsive sidebar becomes keyboard-accessible
+navigation on small screens. IST is the default display timezone; UTC is selectable.
+
+Candidate entry, invalidation and targets are rendered as an explicitly recorded
+price-level map. The API does not yet expose a live ticker or candle-history chart;
+the interface does not manufacture either. Sweep filtering uses the recorded trigger
+text and does not claim to expose all sweep events, exact swept boundaries or
+CoinGlass liquidation clusters.
+
+Every evidence panel belongs to the selected candidate snapshot. Cancel in-flight
+reads on selection changes and reject mismatching snapshot/instrument/engine identities.
+Show independent provider attempts from the selected review revision. A provider
+verdict requires its echoed candidate, revision, snapshot, digest, instrument,
+horizon and direction to match. Current candidate lifecycle remains separate from
+historical consensus; elapsed candidates display as expired even between polls.
+
+API reachability is distinct from market/source freshness. Expose observation times,
+missing values, errors and retained historical data after a failed refresh. Health
+flags are informational, not switches. Spend uses reported integer micro-USD fields;
+no percentage-of-budget display is inferred when limits are absent. Research detail
+and paper transitions are scoped to the selected experiment; refresh preserves that
+selection and does not open protected holdout records.
+
+No secret inputs, order controls, invented market data, unmeasured performance or
+calibrated-looking confidence appear. Test fixtures and the standalone hypothetical
+preview are isolated under tests/documentation, outside the production bundle.
 
 ### Operational SLOs (targets not claims)
 - WS reconnect with exponential jitter and observability; stale trades/book invalidated.
