@@ -5,6 +5,30 @@ review and Slack alerts; all external paths are disabled by default and order ex
 2022/2025 initially; Python worker/API run as Windows services after validation. Linux VM/docker
 optional, not required for this starter.
 
+## 2026-11-24 operator evidence and stream-persistence correction
+
+The operator surface is an authenticated, read-only projection over durable evidence. It has five
+separate operational views in addition to research: market overview, order flow, AI consensus,
+settings, and system health. Candlestick data is loaded from immutable REST candle observations;
+larger timeframes are resampled only from complete UTC-aligned one-minute buckets. Daily values are
+reported only when their source candles exist. Provider evidence is revision scoped and includes
+the stored disposition metadata; UI state never promotes model agreement into probability or
+trade authorization.
+
+The Delta public stream uses two logical stages:
+
+1. Receive, normalize, validate sequence/checksum/freshness, and enqueue in source order.
+2. Persist bounded batches, then materialize book checkpoints from the now-durable events.
+
+The queue is bounded by `DELTA_PERSISTENCE_QUEUE_SIZE` and batches by
+`DELTA_PERSISTENCE_BATCH_SIZE`. A full queue fails the collector closed and forces discovery/task
+recovery. It does not drop data and does not relax `DELTA_BOOK_MAX_AGE_SECONDS`.
+
+Reconciliation selects the continuously connected suffix ending at the latest closed minute, then
+rounds a reconnect forward to the next full minute. Only streamed candles wholly inside that suffix
+are compared with factually available REST candles. This removes the previous rolling-window
+lockout while retaining missing-stream, missing-REST, mismatch, and stale-source rejection.
+
 ## Phase 6 evidence architecture
 
 The [independent Phase 6 review](docs/audits/phase-6-independent-review.md) defined the closeout

@@ -1,6 +1,6 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
-## Operator observability — first dashboard slice
+## Operator observability and live-data reliability (2026-11-24)
 
 The authenticated `/api/market/overview` endpoint reads only locally persisted Delta evidence.
 It exposes the latest recorded executed trade for each discovered market (or explicitly unverified
@@ -11,11 +11,26 @@ that a signal is profitable or eligible. Candidate history supports server-side 
 filtering before pagination. The market view polls independently of the research view.
 No API keys, real requests, or changes to existing enabled flags are made by the dashboard.
 
-Still pending: daily open/previous close/high/low and charts with validated session coverage;
-dedicated order-flow and settings pages; detailed independent analyst rationale and provider
-smoke-test resolution; reconciliation and WebSocket live soak; CoinGlass heatmap entitlement;
-dashboard-only consensus decoupling from Slack; overall readiness-policy review; prospective
-paper observation and actual performance. The new view does not fix these integrations.
+The completed operator slice adds factual closed-candle charts for `1m`, `5m`, `15m`, and `1h`,
+UTC daily open/previous close/high/low/change with explicit incomplete states, and dedicated Order
+Flow, AI Consensus, Settings, and System Health pages. Provider attempts expose stored status,
+requested/returned model, latency, failure code, and validated assessment evidence. Settings are
+read-only and secret-safe. Dashboard-only operation does not require Slack; external alerts remain
+controlled only by `ALERTS_ENABLED`.
+
+The public WebSocket collector now separates receive/validation from SQLite latency using a bounded
+ordered queue and transactional event batches. Book checkpoints are rebuilt only after their raw
+events are durable. Candle reconciliation starts at the first complete clock-aligned minute after
+the latest healthy reconnect and still fails closed for gaps, mismatches, stale books, or missing
+coverage. Queue exhaustion is a collector failure, not permission to discard events.
+
+The UI can be checked with `cd frontend; npm run test:browser`. Tests use recorded synthetic API
+responses and make no provider or exchange calls. The operational verification report is
+[`docs/audits/operator-observability-verification-2026-11-24.md`](docs/audits/operator-observability-verification-2026-11-24.md).
+
+Still pending: a separately authorized future Anthropic smoke retry, CoinGlass entitlement/API verification,
+external notifications, a longer live soak, prospective paper observation, and empirical
+performance. No performance or provider-connectivity claim is inferred from software tests.
 
 ## Controlled live validation status (2026-11-24)
 
