@@ -546,15 +546,19 @@ async def public_market_stream(settings: Settings, store: Store, symbols: list[s
         interval = max(min(settings.delta_book_max_age_seconds / 2, 5.0), 0.1)
         while True:
             await asyncio.sleep(interval)
-            now = datetime.now(UTC)
+            heartbeat_now = datetime.now(UTC)
             if (
                 stream.last_seen_utc is not None
-                and (now - stream.last_seen_utc).total_seconds()
+                and (heartbeat_now - stream.last_seen_utc).total_seconds()
                 > settings.delta_book_max_age_seconds
             ):
                 stream.mark_stale("No recent validated public market event")
             for symbol in symbols:
-                quality = stream.book_quality(symbol, now=now)
+                # The preceding database write yields to the receive task. Capture
+                # this clock immediately before the synchronous read so a frame
+                # received during that yield is not compared with an older symbol's
+                # observation boundary.
+                quality = stream.book_quality(symbol, now=datetime.now(UTC))
                 state = "VALID" if quality[0] else "INVALID"
                 await asyncio.to_thread(
                     store.record_source_status, f"delta_book:{symbol}", state, quality[1]

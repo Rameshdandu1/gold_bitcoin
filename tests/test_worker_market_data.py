@@ -146,6 +146,54 @@ async def test_public_stream_batches_persistence_without_blocking_each_received_
 
 
 @pytest.mark.asyncio
+async def test_book_monitor_uses_each_symbols_current_observation_clock(tmp_path, monkeypatch):
+    """A frame received while the previous symbol persists is not future evidence."""
+    stream_holder = {}
+
+    class FakeStream:
+        def __init__(self, _url, _symbols, *, status_callback, **_kwargs):
+            self.status_callback = status_callback
+            self.last_seen_utc = datetime.now(UTC)
+            self.xaut_received_at = self.last_seen_utc
+            self.books = {}
+            stream_holder["stream"] = self
+
+        async def messages(self):
+            self.status_callback("CONNECTED", "fixture event")
+            await asyncio.sleep(0.7)
+            if False:
+                yield trade_event(self.last_seen_utc)
+
+        def book_quality(self, symbol, *, now=None):
+            if symbol == "BTCUSD":
+                return False, "snapshot_required"
+            if now < self.xaut_received_at:
+                return False, "received_after_evaluation_clock"
+            return True, "valid"
+
+        def mark_stale(self, detail):
+            self.status_callback("STALE", detail)
+
+    monkeypatch.setattr("marketintel.worker.DeltaPublicStream", FakeStream)
+    store = Store(tmp_path / "market.sqlite3")
+    original_status = store.record_source_status
+
+    def record_status(source, state, detail="", **kwargs):
+        if source == "delta_book:BTCUSD":
+            stream_holder["stream"].xaut_received_at = datetime.now(UTC)
+        return original_status(source, state, detail, **kwargs)
+
+    monkeypatch.setattr(store, "record_source_status", record_status)
+    settings = Settings(database_path=tmp_path / "market.sqlite3", delta_book_max_age_seconds=1)
+
+    await public_market_stream(settings, store, ["BTCUSD", "XAUTUSD"])
+
+    xaut = store.source_status_history("delta_book:XAUTUSD")
+    assert xaut[-1]["state"] == "VALID"
+    assert xaut[-1]["detail"] == "valid"
+
+
+@pytest.mark.asyncio
 async def test_worker_reconciles_closed_trade_candle_and_persists_valid_status(
     tmp_path, monkeypatch
 ):
