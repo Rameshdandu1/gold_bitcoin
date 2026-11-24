@@ -23,9 +23,7 @@ def _status(
     sources: dict[str, dict], name: str, state: str, now: datetime, maximum_age: float
 ) -> bool:
     row = sources.get(name, {})
-    return row.get("state") == state and _fresh(
-        row.get("heartbeat_at_utc"), now, maximum_age
-    )
+    return row.get("state") == state and _fresh(row.get("heartbeat_at_utc"), now, maximum_age)
 
 
 def _market(
@@ -107,7 +105,9 @@ def _market(
             now,
             max(settings.poll_seconds * 2, settings.data_max_age_seconds),
         )
-        else "STALE" if snapshot else "UNAVAILABLE"
+        else "STALE"
+        if snapshot
+        else "UNAVAILABLE"
     )
     checks = {
         "worker_current": worker_current,
@@ -131,15 +131,15 @@ def _market(
         "price_received_at_utc": trade.received_at_utc.isoformat() if trade else None,
         "book": {
             "state": "FRESH" if book_fresh else "UNAVAILABLE",
-            "reason": book_reason if not book_valid else "valid" if book_fresh else (
-                "source, symbol, freshness or top-of-book check failed"
-            ),
+            "reason": book_reason
+            if not book_valid
+            else "valid"
+            if book_fresh
+            else ("source, symbol, freshness or top-of-book check failed"),
             "best_bid": str(top[0]) if book_fresh and top else None,
             "best_ask": str(top[1]) if book_fresh and top else None,
             "event_time_utc": (
-                book.last_event_time_utc.isoformat()
-                if book and book.last_event_time_utc
-                else None
+                book.last_event_time_utc.isoformat() if book and book.last_event_time_utc else None
             ),
             "sequence": book.last_sequence if book else None,
         },

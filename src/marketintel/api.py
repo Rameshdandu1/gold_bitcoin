@@ -190,9 +190,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     ) -> list[dict]:
         if horizon_minutes is not None and horizon_minutes not in (30, 60, 240):
             raise HTTPException(status_code=422, detail="Unsupported horizon")
-        return store.recent_candidates(
-            limit, offset, asset=asset, horizon_minutes=horizon_minutes
-        )
+        return store.recent_candidates(limit, offset, asset=asset, horizon_minutes=horizon_minutes)
 
     @app.get("/api/candidates/{candidate_id}/assessments")
     def assessments(candidate_id: str) -> list[dict]:
