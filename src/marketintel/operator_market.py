@@ -1,11 +1,12 @@
 """Read-only local operator diagnostics; never makes external requests or confirms signals."""
 
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from marketintel.config import Settings
 from marketintel.delta import DeltaDataIntegrityError
 from marketintel.detectors import describe_engines
+from marketintel.features import resample_closed_candles
 from marketintel.replay import replay_trade_records
 from marketintel.storage import Store
 
@@ -188,4 +189,125 @@ def operator_overview(store: Store, settings: Settings, *, now: datetime) -> dic
         "budget": store.budget_status(now=now),
         "queue": store.queue_status(now=now),
         "daily_ai_budget_microusd": settings.ai_total_cost_limit_microusd_per_day,
+    }
+
+
+def operator_candles(
+    store: Store,
+    settings: Settings,
+    *,
+    asset: str,
+    resolution: str,
+    limit: int,
+    now: datetime,
+) -> dict:
+    """Bounded chart data derived only from immutable REST observations."""
+    sources = {row["source"]: row for row in store.all_source_health()}
+    discovery = sources.get(f"product_discovery:{asset}", {})
+    match = re.fullmatch(r"verified ([A-Z0-9_-]+) product metadata", discovery.get("detail", ""))
+    symbol = (
+        match.group(1)
+        if match
+        else settings.gold_symbol
+        if asset == "GOLD"
+        else settings.btc_symbol
+    )
+    base = store.latest_rest_candles(symbol=symbol, resolution="1m", through=now, limit=3000)
+    if resolution == "1m":
+        series = base
+    else:
+        series = resample_closed_candles(base, target_resolution=resolution, through=now)
+    series = series[-limit:]
+    day_start = datetime.combine(now.astimezone(UTC).date(), datetime.min.time(), tzinfo=UTC)
+    previous_close_time = day_start - timedelta(minutes=1)
+    today = [candle for candle in base if candle.open_time >= day_start]
+    previous_close = next(
+        (candle.close for candle in reversed(base) if candle.open_time == previous_close_time), None
+    )
+    daily_open = next((candle.open for candle in today if candle.open_time == day_start), None)
+    latest_close = today[-1].close if today else None
+    change = (
+        latest_close - previous_close
+        if latest_close is not None and previous_close is not None
+        else None
+    )
+    change_percent = (
+        change / previous_close * 100 if change is not None and previous_close else None
+    )
+    daily_state = (
+        "AVAILABLE"
+        if today and daily_open is not None and previous_close is not None
+        else "INCOMPLETE"
+    )
+    return {
+        "asset": asset,
+        "symbol": symbol,
+        "resolution": resolution,
+        "data_state": "AVAILABLE" if series else "UNAVAILABLE",
+        "candles": [candle.model_dump(mode="json") for candle in series],
+        "daily": {
+            "state": daily_state if base else "UNAVAILABLE",
+            "session_date_utc": day_start.date().isoformat(),
+            "open": daily_open,
+            "previous_close": previous_close,
+            "high": max((candle.high for candle in today), default=None),
+            "low": min((candle.low for candle in today), default=None),
+            "latest_close": latest_close,
+            "change": change,
+            "change_percent": change_percent,
+        },
+        "warning": (
+            "Observed Delta candles; unavailable fields are not inferred."
+            if base
+            else "No factual REST candle observation is available."
+        ),
+    }
+
+
+def operator_settings(settings: Settings) -> dict:
+    """Return operator-safe configuration metadata; never return secret values."""
+    return {
+        "features": {
+            "live_ingestion_enabled": settings.live_ingestion_enabled,
+            "ai_enabled": settings.ai_enabled,
+            "alerts_enabled": settings.alerts_enabled,
+            "paper_collection_enabled": settings.paper_collection_enabled,
+            "trading_enabled": False,
+        },
+        "models": {
+            "openai": settings.openai_model or None,
+            "anthropic": settings.anthropic_model or None,
+        },
+        "providers": {
+            "openai_configured": bool(settings.openai_api_key and settings.openai_model),
+            "anthropic_configured": bool(settings.anthropic_api_key and settings.anthropic_model),
+            "coinglass_enabled": settings.coinglass_enabled,
+            "coinglass_configured": bool(settings.coinglass_api_key),
+        },
+        "notifications": {
+            "dashboard_only_supported": True,
+            "slack_configured": bool(
+                settings.slack_bot_token.get_secret_value() and settings.slack_channel_id
+            ),
+            "external_notifications_enabled": settings.alerts_enabled,
+        },
+        "limits": {
+            "daily_ai_budget_microusd": settings.ai_total_cost_limit_microusd_per_day,
+            "daily_ai_call_limit": settings.ai_total_call_limit_per_day,
+            "provider_call_limit": settings.ai_provider_call_limit_per_day,
+            "provider_deadline_seconds": settings.ai_total_deadline_seconds,
+        },
+        "market_data": {
+            "book_max_age_seconds": settings.delta_book_max_age_seconds,
+            "reconciliation_max_age_seconds": settings.delta_reconciliation_max_age_seconds,
+            "persistence_queue_size": settings.delta_persistence_queue_size,
+            "persistence_batch_size": settings.delta_persistence_batch_size,
+        },
+        "risk": {
+            "fee_bps": settings.risk_fee_bps or None,
+            "slippage_bps": settings.risk_slippage_bps or None,
+            "maximum_entry_drift_bps": settings.risk_maximum_entry_drift_bps,
+            "maximum_spread_bps": settings.risk_maximum_spread_bps,
+            "minimum_net_reward_risk": settings.risk_minimum_net_reward_risk,
+        },
     }

@@ -11,7 +11,12 @@ from marketintel.analysis import build_analysis_envelope, material_proposal_dige
 from marketintel.coinglass import CoinGlassV4, unavailable_context
 from marketintel.config import Settings
 from marketintel.consensus import decide
-from marketintel.delta import DeltaPublicStream, DeltaREST, OrderBookAssembler
+from marketintel.delta import (
+    DeltaDataIntegrityError,
+    DeltaPublicStream,
+    DeltaREST,
+    OrderBookAssembler,
+)
 from marketintel.detectors import BAR_MINUTES, create_candidate
 from marketintel.models import Instrument, SignalState, Status
 from marketintel.orchestration import frozen_provider_config
@@ -241,23 +246,40 @@ async def poll_closed_candles(
                             service, "WAIT", "No complete streamed 1m candle available"
                         )
                     else:
-                        first = replayed[0].open_time
-                        coverage_end = replayed[-1].open_time + timedelta(minutes=1)
-                        if not store.source_interval_covered(
-                            "delta_websocket", start=first, end=coverage_end
-                        ):
+                        coverage_end = closed_minute
+                        coverage_start = store.continuous_source_coverage_start(
+                            "delta_websocket", start=reconciliation_start, end=coverage_end
+                        )
+                        if coverage_start is None:
                             store.record_source_status(
                                 service,
                                 "WAIT",
-                                "Stream collector coverage is incomplete for reconciliation",
+                                "No continuously connected WebSocket suffix reaches the latest "
+                                "closed minute",
                             )
                         else:
+                            first_complete = coverage_start.replace(second=0, microsecond=0)
+                            if coverage_start > first_complete:
+                                first_complete += timedelta(minutes=1)
+                            covered_replayed = [
+                                candle for candle in replayed if candle.open_time >= first_complete
+                            ]
+                            if not covered_replayed:
+                                store.record_source_status(
+                                    service,
+                                    "WAIT",
+                                    "Stream collector coverage is incomplete: WebSocket recovered "
+                                    "but no fully covered streamed 1m candle is available; "
+                                    f"coverage_start={first_complete.isoformat()}",
+                                )
+                                continue
+                            first = covered_replayed[0].open_time
                             rest_overlap = [
                                 candle for candle in rest_closed if candle.open_time >= first
                             ]
-                            result = reconcile_candles(rest_overlap, replayed)
+                            result = reconcile_candles(rest_overlap, covered_replayed)
                             detail = (
-                                f"matched={result.matched}; "
+                                f"coverage_start={first.isoformat()}; matched={result.matched}; "
                                 f"missing_stream={len(result.missing_from_stream)}; "
                                 f"missing_rest={len(result.missing_from_rest)}; "
                                 f"mismatched={len(result.mismatched)}"
@@ -494,11 +516,18 @@ async def poll_closed_candles(
 
 
 async def public_market_stream(settings: Settings, store: Store, symbols: list[str]) -> None:
+    persistence_queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue(
+        maxsize=settings.delta_persistence_queue_size
+    )
+    last_status_at: datetime | None = None
+
     def persist_connection_status(state: str, detail: str) -> None:
-        if state in {"CONNECTING", "DISCONNECTED"}:
-            for book in getattr(stream, "books", {}).values():
-                store.save_book_checkpoint(book)
-        store.record_source_status("delta_websocket", state, detail)
+        nonlocal last_status_at
+        occurred_at = datetime.now(UTC)
+        if last_status_at is not None and occurred_at <= last_status_at:
+            occurred_at = last_status_at + timedelta(microseconds=1)
+        last_status_at = occurred_at
+        persistence_queue.put_nowait(("status", (state, detail, occurred_at)))
 
     stream = DeltaPublicStream(
         settings.delta_ws_url,
@@ -507,6 +536,11 @@ async def public_market_stream(settings: Settings, store: Store, symbols: list[s
         status_callback=persist_connection_status,
     )
     book_states: dict[str, tuple[bool, str]] = {}
+    persistence_books = {
+        symbol: OrderBookAssembler(symbol, max_age_seconds=settings.delta_book_max_age_seconds)
+        for symbol in symbols
+    }
+    producer_done = asyncio.Event()
 
     async def monitor_freshness() -> None:
         interval = max(min(settings.delta_book_max_age_seconds / 2, 5.0), 0.1)
@@ -522,24 +556,81 @@ async def public_market_stream(settings: Settings, store: Store, symbols: list[s
             for symbol in symbols:
                 quality = stream.book_quality(symbol, now=now)
                 state = "VALID" if quality[0] else "INVALID"
-                store.record_source_status(f"delta_book:{symbol}", state, quality[1])
+                await asyncio.to_thread(
+                    store.record_source_status, f"delta_book:{symbol}", state, quality[1]
+                )
                 book_states[symbol] = quality
+
+    async def produce() -> None:
+        try:
+            async for event in stream.messages():
+                try:
+                    persistence_queue.put_nowait(("event", event))
+                except asyncio.QueueFull as exc:
+                    stream.invalidate_books("local_persistence_backpressure")
+                    await asyncio.to_thread(
+                        store.record_source_status,
+                        "delta_websocket",
+                        "DISCONNECTED",
+                        "Local persistence queue reached its configured bound",
+                    )
+                    raise DeltaDataIntegrityError("Local persistence queue is full") from exc
+        finally:
+            producer_done.set()
+
+    async def persist_event_batch(events: list) -> None:
+        await asyncio.to_thread(store.append_raw_events, events)
+        changed: set[str] = set()
+        for event in events:
+            if event.channel == "ob_updates" and event.symbol in persistence_books:
+                persistence_books[event.symbol].apply(event)
+                changed.add(event.symbol)
+        for symbol in changed:
+            await asyncio.to_thread(store.save_book_checkpoint, persistence_books[symbol])
+
+    async def consume() -> None:
+        while not producer_done.is_set() or not persistence_queue.empty():
+            try:
+                first = await asyncio.wait_for(persistence_queue.get(), timeout=0.1)
+            except TimeoutError:
+                continue
+            chunk = [first]
+            while len(chunk) < settings.delta_persistence_batch_size:
+                try:
+                    chunk.append(persistence_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            event_batch = []
+            for kind, payload in chunk:
+                if kind == "event":
+                    event_batch.append(payload)
+                    continue
+                if event_batch:
+                    await persist_event_batch(event_batch)
+                    event_batch = []
+                state, detail, occurred_at = payload
+                if state in {"CONNECTING", "DISCONNECTED", "STALE"}:
+                    reason = (
+                        "fresh_snapshot_required_after_connect"
+                        if state == "CONNECTING"
+                        else "fresh_snapshot_required_after_disconnect"
+                    )
+                    for book in persistence_books.values():
+                        book.invalidate(reason)
+                        await asyncio.to_thread(store.save_book_checkpoint, book)
+                await asyncio.to_thread(
+                    store.record_source_status,
+                    "delta_websocket",
+                    state,
+                    detail,
+                    occurred_at=occurred_at,
+                )
+            if event_batch:
+                await persist_event_batch(event_batch)
 
     monitor = asyncio.create_task(monitor_freshness())
     try:
-        async for event in stream.messages():
-            inserted = await asyncio.to_thread(store.append_raw_event, event)
-            if not inserted:
-                continue
-            if event.channel == "ob_updates":
-                book = stream.books.get(event.symbol)
-                if book is not None:
-                    await asyncio.to_thread(store.save_book_checkpoint, book)
-                quality = stream.book_quality(event.symbol)
-                if book_states.get(event.symbol) != quality:
-                    state = "VALID" if quality[0] else "INVALID"
-                    store.record_source_status(f"delta_book:{event.symbol}", state, quality[1])
-                    book_states[event.symbol] = quality
+        await asyncio.gather(produce(), consume())
     finally:
         monitor.cancel()
         with suppress(asyncio.CancelledError):

@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from marketintel.config import Settings
 from marketintel.detectors import describe_engines
-from marketintel.operator_market import operator_overview
+from marketintel.operator_market import operator_candles, operator_overview, operator_settings
 from marketintel.research_storage import PaperLedger, ResearchStore
 from marketintel.storage import Store
 
@@ -153,7 +153,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             and gold_reconciliation_current
         )
         checks = {
-            "database_migration": "0006_phase6_evidence_integrity" in store.migration_ids(),
+            "database_migration": {
+                "0006_phase6_evidence_integrity",
+                "0007_operator_observability",
+            }.issubset(store.migration_ids()),
             "operator_authentication": (
                 not settings.operator_auth_enabled
                 or bool(
@@ -230,6 +233,27 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.get("/api/market/overview")
     def market_overview() -> dict:
         return operator_overview(store, settings, now=datetime.now(UTC))
+
+    @app.get("/api/market/candles")
+    def market_candles(
+        asset: Literal["GOLD", "BTC"],
+        resolution: Literal["1m", "5m", "15m", "1h"] = "1m",
+        limit: int = 240,
+    ) -> dict:
+        if not 10 <= limit <= 1000:
+            raise HTTPException(status_code=422, detail="limit must be between 10 and 1000")
+        return operator_candles(
+            store,
+            settings,
+            asset=asset,
+            resolution=resolution,
+            limit=limit,
+            now=datetime.now(UTC),
+        )
+
+    @app.get("/api/operator/settings")
+    def safe_operator_settings() -> dict:
+        return operator_settings(settings)
 
     @app.get("/api/candidates")
     def candidates(

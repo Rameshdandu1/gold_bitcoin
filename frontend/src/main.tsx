@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 import './phase4.css'
 import { OperatorMarket } from './OperatorMarket'
+import { AIConsensusPage, OrderFlowPage, SettingsPage, SystemHealthPage } from './OperatorPages'
 
 type ResearchSummary = {
   status: 'NOT_STARTED' | 'INSUFFICIENT_DATA' | 'EXPLORATORY'; experiment_count: number; report_count: number; opportunity_count: number;
@@ -24,7 +25,7 @@ type PaperTransition = {event_id: string; opportunity_id: string; arm: string; s
 function formatTime(utc: string) { return new Date(utc).toLocaleString('en-IN', {timeZone:'Asia/Kolkata',hour12:true}) + ' IST' }
 
 function App() {
-  const [view, setView] = useState<'market' | 'research'>('market')
+  const [view, setView] = useState<'market' | 'order-flow' | 'ai-consensus' | 'research' | 'settings' | 'health'>('market')
   const [research, setResearch] = useState<ResearchSummary | null>(null)
   const [researchExperiments, setResearchExperiments] = useState<ResearchExperiment[]>([])
   const [researchSelected, setResearchSelected] = useState<string | null>(null)
@@ -64,14 +65,15 @@ function App() {
       <div className="identity"><span className="logo">◈</span><div><strong>VECTOR INTELLIGENCE</strong><small>DUAL AI RESEARCH</small></div></div>
       <div className="nav-heading">WORKSPACE</div>
       <button className={'nav nav-button '+(view==='market'?'active':'')} onClick={()=>setView('market')}>▤ &nbsp; Market Overview</button>
-      <div className="nav disabled">⌁ &nbsp; Order Flow <small>PLANNED</small></div>
-      <div className="nav disabled">◉ &nbsp; AI Consensus <small>IN OVERVIEW</small></div>
+      <button className={'nav nav-button '+(view==='order-flow'?'active':'')} onClick={()=>setView('order-flow')}>⌁ &nbsp; Order Flow</button>
+      <button className={'nav nav-button '+(view==='ai-consensus'?'active':'')} onClick={()=>setView('ai-consensus')}>◉ &nbsp; AI Consensus</button>
       <button className={'nav nav-button '+(view==='research'?'active':'')} onClick={()=>setView('research')}>◷ &nbsp; Research <small>PHASE 5</small></button>
-      <div className="nav disabled">⚙ &nbsp; Settings <small>PLANNED</small></div>
+      <button className={'nav nav-button '+(view==='settings'?'active':'')} onClick={()=>setView('settings')}>⚙ &nbsp; Settings</button>
+      <button className={'nav nav-button '+(view==='health'?'active':'')} onClick={()=>setView('health')}>✚ &nbsp; System Health</button>
       <div className="sidebar-bottom"><span className="status-dot"/> Research mode<br/><small>No order execution</small></div>
     </aside>
     <main className="main">
-      <header><div><p className="eyebrow">MARKET INTELLIGENCE / OVERVIEW</p><h1>Gold & Bitcoin <span>Intelligence</span></h1><p className="muted">Six independent horizons · Two independent AI analysts · Auditable evidence</p></div><span className="pill muted-pill">● RESEARCH ONLY</span></header>
+      <header><div><p className="eyebrow">MARKET INTELLIGENCE / {view.replace('-', ' ').toUpperCase()}</p><h1>Gold & Bitcoin <span>Vector Intelligence</span></h1><p className="muted">Six independent horizons · Two independent AI analysts · Auditable evidence</p></div><span className="pill muted-pill">● RESEARCH ONLY</span></header>
       {view === 'research' && error && <div className="alert" role="alert">Backend connection issue: {error}. No signals should be treated as live until the server reconnects.</div>}
       {view === 'research' ? <section className="research-page">
         <div className="section-head"><div><p className="eyebrow">HISTORICAL EVALUATION / PROSPECTIVE PAPER</p><h2>Research evidence</h2></div><span className="pill muted-pill">HYPOTHETICAL · EXPLORATORY</span></div>
@@ -86,7 +88,7 @@ function App() {
           <div className="panel"><div className="section-head"><h2>Paper transitions</h2><small>Bounded latest 20</small></div><div className="research-table">{paperTransitions.length ? paperTransitions.map(row=><div key={row.event_id}><strong>{row.arm}</strong><span>{row.state}</span><span>{formatTime(row.occurred_at_utc)}</span></div>) : <p className="muted">No paper transitions recorded.</p>}</div></div>
           <div className="panel research-notice"><strong>Evidence limitations</strong><p>{research.warning}</p><p>{research.paper.warning}</p><p>Counter scope: {research.counter_scope} · External calls: {research.external_calls_performed ?? 'not measured'} · Real notifications: {research.real_notifications_sent ?? 'not measured'} · Orders: {research.orders_placed ?? 'unsupported'}</p></div>
         </>}
-      </section> : <OperatorMarket />}
+      </section> : view === 'market' ? <OperatorMarket/> : view === 'order-flow' ? <OrderFlowPage/> : view === 'ai-consensus' ? <AIConsensusPage/> : view === 'settings' ? <SettingsPage/> : <SystemHealthPage/>}
     </main>
   </div>
 }
