@@ -165,7 +165,16 @@ def current_eligibility(
         minimum_net_reward_risk=settings.risk_minimum_net_reward_risk,
         calendar_policy="TOKEN_MARKET_ONLY",
         notification_ready=bool(
-            settings.slack_channel_id and settings.slack_bot_token.get_secret_value()
+            (
+                settings.operator_auth_enabled
+                and settings.operator_username
+                and settings.operator_password.get_secret_value()
+            )
+            or (
+                settings.alerts_enabled
+                and settings.slack_channel_id
+                and settings.slack_bot_token.get_secret_value()
+            )
         ),
     )
 
@@ -319,11 +328,14 @@ class ReviewWorker:
                 run_id=claim["run_id"],
                 provider_attempt_ids=attempt_ids,
             )
-            destination = (
-                f"slack:{self.settings.slack_channel_id}"
-                if decision.status == "CONFIRMED"
-                else None
-            )
+            destination = None
+            if (
+                decision.status == "CONFIRMED"
+                and self.settings.alerts_enabled
+                and self.settings.slack_channel_id
+                and self.settings.slack_bot_token.get_secret_value()
+            ):
+                destination = f"slack:{self.settings.slack_channel_id}"
             committed = self.store.commit_consensus_decision_and_outbox(
                 decision,
                 destination_id=destination,

@@ -1,5 +1,19 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
+## Controlled live validation status (2026-11-24)
+
+A bounded local Windows run discovered live BTCUSD, XAUTUSD and PAXGUSD instruments and persisted
+REST candles plus public trades/order-book updates. All six engines reached `WATCH` after their
+required trade windows filled. This is operational evidence, not a market signal or performance
+claim. Repeated fail-closed WebSocket resynchronizations left REST/stream candle reconciliation
+incomplete, so authenticated `/readyz` correctly remains 503 while collection continues. See the
+[operational validation report](docs/audits/operational-validation-2026-11-24.md).
+
+One structured-output smoke was attempted per provider under an authorized combined $5 UTC-day
+cap. OpenAI succeeded; Anthropic returned a strict parsing failure and was not retried. Therefore
+`AI_ENABLED=false` remains in the local runtime. CoinGlass and external notifications also remain
+off. `TRADING_ENABLED=false`; orders and private exchange-account access remain absent.
+
 ## Current status: Phase 6 offline contract corrections implemented
 
 The [independent workflow-acceptance review](docs/audits/phase-6-workflow-acceptance-independent-review.md)
@@ -140,7 +154,15 @@ reconstruct events from before collection began. Missing/invalid Gold instrument
 `UNAVAILABLE`/`PARTIAL`, not a substitute symbol or fake signal. With `AI_ENABLED=true`, a candidate
 with a complete feature snapshot queues one immutable review; `python -m
 marketintel.review_worker` processes it only when both providers, operator-entered rates, spend caps
-and risk assumptions are configured. `python -m marketintel.notifications` sends only when
+and risk assumptions are configured. A paid connectivity check must be explicitly authorized and
+is limited by the durable UTC-day ledger:
+
+```powershell
+python -m marketintel.provider_smoke --authorize-paid-smoke --output data\operational\provider-smoke.json
+```
+
+Confirmed decisions remain visible in the authenticated dashboard when alerts are disabled.
+`python -m marketintel.notifications` sends only when
 `ALERTS_ENABLED=true` and Slack is explicitly configured. No process contains an order path.
 
 Build frontend:
@@ -223,9 +245,9 @@ No `DELTA_API_KEY` is needed for public market data; do not give trading permiss
 - Agreement is followed by a new deterministic read of active revision, lifecycle, executed trade,
   target/stop ordering, validated book, spread, entry drift, costs and reward/risk. Approval of an
   older revision is never transferred.
-- Slack is the one implemented channel. Confirmation and terminal lifecycle notifications use
-  distinct stable identities and durable receipt states. Alerts remain off unless explicitly
-  authorized; no real notification was sent during development verification.
+- Slack is the one implemented external channel, but it is optional: confirmed decisions can be
+  persisted for the authenticated dashboard without an outbox destination. When enabled,
+  notifications retain distinct stable identities and durable receipt states.
 - HTTP Basic is a single-operator control, not transport encryption. Keep the API on loopback and
   use a restricted HTTPS reverse proxy/VPN for remote access. See the Windows runbook.
 

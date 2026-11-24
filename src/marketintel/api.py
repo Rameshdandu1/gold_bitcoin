@@ -91,6 +91,65 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             and (now - datetime.fromisoformat(worker["heartbeat_at_utc"])).total_seconds()
             <= settings.delta_discovery_refresh_seconds + 60
         )
+
+        def source_current(source: str, accepted: set[str], maximum_age: float) -> bool:
+            health = store.source_health(source)
+            if (
+                health is None
+                or health["state"] not in accepted
+                or health["last_success_at_utc"] is None
+            ):
+                return False
+            age = (now - datetime.fromisoformat(health["last_success_at_utc"])).total_seconds()
+            return 0 <= age <= maximum_age
+
+        gold_symbols = tuple(dict.fromkeys((settings.gold_symbol, "XAUTUSD", "PAXGUSD")))
+        gold_book_current = any(
+            source_current(
+                f"delta_book:{symbol}",
+                {"VALID"},
+                settings.delta_book_max_age_seconds + 5,
+            )
+            for symbol in gold_symbols
+        )
+        gold_reconciliation_current = any(
+            source_current(
+                f"candle_reconciliation:{symbol}",
+                {"VALID"},
+                settings.delta_reconciliation_max_age_seconds,
+            )
+            for symbol in gold_symbols
+        )
+        required_market_sources = (
+            all(
+                source_current(source, states, maximum_age)
+                for source, states, maximum_age in (
+                    (
+                        "product_discovery:BTC",
+                        {"AVAILABLE"},
+                        settings.delta_discovery_max_age_seconds,
+                    ),
+                    (
+                        "product_discovery:GOLD",
+                        {"AVAILABLE"},
+                        settings.delta_discovery_max_age_seconds,
+                    ),
+                    ("delta_websocket", {"CONNECTED"}, settings.data_max_age_seconds),
+                    (
+                        f"delta_book:{settings.btc_symbol}",
+                        {"VALID"},
+                        settings.delta_book_max_age_seconds + 5,
+                    ),
+                    (
+                        f"candle_reconciliation:{settings.btc_symbol}",
+                        {"VALID"},
+                        settings.delta_reconciliation_max_age_seconds,
+                    ),
+                )
+            )
+            and gold_book_current
+            and gold_reconciliation_current
+        )
         checks = {
             "database_migration": "0006_phase6_evidence_integrity" in store.migration_ids(),
             "operator_authentication": (
@@ -113,8 +172,6 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                     and settings.ai_total_cost_limit_microusd_per_day > 0
                     and settings.risk_fee_bps
                     and settings.risk_slippage_bps
-                    and settings.slack_bot_token.get_secret_value()
-                    and settings.slack_channel_id
                 )
             ),
             "alert_configuration": (
@@ -123,14 +180,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             ),
             "worker_heartbeat": not settings.live_ingestion_enabled or worker_current,
             "required_market_sources": not settings.live_ingestion_enabled
-            or all(
-                store.source_is_eligible(
-                    f"product_discovery:{asset}",
-                    now=now,
-                    maximum_success_age_seconds=settings.delta_discovery_max_age_seconds,
-                )
-                for asset in ("BTC", "GOLD")
-            ),
+            or required_market_sources,
             "review_queue_recoverable": (
                 queue["stale_review_leases"] == 0 and queue["review_jobs"].get("DISPATCHED", 0) == 0
             ),

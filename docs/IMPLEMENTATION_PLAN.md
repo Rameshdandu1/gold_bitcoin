@@ -224,6 +224,13 @@ Offline preparation is available in
   actual model/request/usage evidence; preserve missing context as unavailable.
 - [ ] Verify an authorized notification destination and controlled failure/recovery behavior.
 
+**2026-11-24 local controlled run:** public discovery, candles, trades, validated books,
+authenticated dashboard and all six engine loops were exercised on Windows. OpenAI structured
+output passed one budgeted smoke; Anthropic failed strict parsing and was not retried. Delta
+reconnects remained fail-closed and reconciliation did not obtain continuous coverage, so the
+Delta and dual-provider rows remain incomplete. CoinGlass and notifications were not enabled. See
+[`operational-validation-2026-11-24.md`](audits/operational-validation-2026-11-24.md).
+
 Prepare these checks during closeout. Run external steps only with available prerequisites and
 existing or newly supplied authorization; leave absent prerequisites explicit. No orders.
 

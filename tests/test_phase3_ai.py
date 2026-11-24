@@ -10,6 +10,7 @@ from marketintel.ai import (
     ClaudeAnalyst,
     GPTAnalyst,
     TransportReply,
+    _anthropic_parsed_assessment,
     independent_review_v2,
     provider_request_bytes,
 )
@@ -44,6 +45,33 @@ def valid_assessment(analysis, **changes):
     }
     payload.update(changes)
     return AnalystAssessmentV2.model_validate(payload)
+
+
+def test_anthropic_transport_parser_preserves_invalid_semantics_as_typed_missing_output():
+    analysis = analysis_fixture()
+
+    class TextBlock:
+        type = "text"
+        text = valid_assessment(analysis).model_dump_json()
+
+    class Response:
+        content = [TextBlock()]
+
+    parsed, error = _anthropic_parsed_assessment(Response())
+    assert parsed is not None
+    assert error is None
+
+    invalid = valid_assessment(analysis).model_dump(mode="json")
+    invalid["decision"] = "WAIT"
+
+    class InvalidTextBlock:
+        type = "text"
+        text = __import__("json").dumps(invalid)
+
+    Response.content = [InvalidTextBlock()]
+    parsed, error = _anthropic_parsed_assessment(Response())
+    assert parsed is None
+    assert error == "ValidationError"
 
 
 def analysis_fixture():
@@ -321,7 +349,7 @@ def review_settings(**changes):
         "anthropic_output_microusd_per_million_tokens": 1_000_000,
     }
     values.update(changes)
-    return Settings(**values)
+    return Settings(_env_file=None, **values)
 
 
 def queued_review(store, analysis, settings):
