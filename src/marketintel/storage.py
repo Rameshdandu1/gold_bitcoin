@@ -16,6 +16,7 @@ from marketintel.models import (
     AnalystAssessment,
     Candidate,
     CandidateLifecycleEvent,
+    Candle,
     ConsensusResult,
     EngineDescriptor,
     FeatureSnapshot,
@@ -211,6 +212,7 @@ class Store:
             self._apply_phase4_integration_migration(conn)
             self._apply_phase5_operational_migration(conn)
             self._apply_phase6_evidence_migration(conn)
+            self._apply_operator_observability_migration(conn)
             self._backfill_candidate_revision_identities(conn)
 
     def _apply_phase3_migration(self, conn: sqlite3.Connection) -> None:
@@ -478,6 +480,23 @@ class Store:
                 "ALTER TABLE notification_dispatch_authorizations "
                 "ADD COLUMN evidence_valid_until_utc TEXT"
             )
+        conn.execute(
+            "INSERT INTO schema_migrations VALUES (?, ?)",
+            (migration_id, datetime.now(UTC).isoformat()),
+        )
+
+    def _apply_operator_observability_migration(self, conn: sqlite3.Connection) -> None:
+        """Add the lookup used by authenticated live candle queries."""
+        migration_id = "0007_operator_observability"
+        if conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE migration_id=?", (migration_id,)
+        ).fetchone():
+            return
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS rest_candle_observations_symbol_resolution_available "
+            "ON rest_candle_observations "
+            "(symbol, resolution, response_available_at_utc DESC, observation_id DESC)"
+        )
         conn.execute(
             "INSERT INTO schema_migrations VALUES (?, ?)",
             (migration_id, datetime.now(UTC).isoformat()),
@@ -851,6 +870,48 @@ class Store:
             )
         return observation_id
 
+    def latest_rest_candles(
+        self,
+        *,
+        symbol: str,
+        resolution: str,
+        through: datetime,
+        limit: int = 2000,
+    ) -> list[Candle]:
+        """Return a bounded factual series from immutable REST observations.
+
+        Newer observations win for the same open time.  A candle is exposed only
+        when both its provider response and close were available at ``through``.
+        """
+        if through.tzinfo is None or through.utcoffset() is None:
+            raise ValueError("through must be timezone aware")
+        bounded_limit = min(max(limit, 1), 5000)
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM rest_candle_observations "
+                "WHERE symbol=? AND resolution=? AND response_available_at_utc<=? "
+                "ORDER BY response_available_at_utc DESC, observation_id DESC LIMIT 16",
+                (symbol, resolution, through.astimezone(UTC).isoformat()),
+            ).fetchall()
+        minutes = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60}.get(resolution)
+        if minutes is None:
+            raise ValueError("Unsupported candle resolution")
+        by_open: dict[datetime, Candle] = {}
+        for (payload,) in rows:
+            for raw in json.loads(payload):
+                candle = Candle.model_validate(raw)
+                if candle.open_time in by_open:
+                    continue
+                if (
+                    candle.available_at_utc is not None
+                    and candle.available_at_utc <= through
+                    and candle.open_time + timedelta(minutes=minutes) <= through
+                ):
+                    by_open[candle.open_time] = candle
+            if len(by_open) >= bounded_limit:
+                break
+        return sorted(by_open.values(), key=lambda candle: candle.open_time)[-bounded_limit:]
+
     def candidate_trade_events(
         self, candidate: Candidate, *, through: datetime
     ) -> list[RawMarketEvent]:
@@ -949,6 +1010,58 @@ class Store:
                 (source, start_text, end_text, *healthy_states),
             ).fetchone()
         return unhealthy is None
+
+    def continuous_source_coverage_start(
+        self,
+        source: str,
+        *,
+        start: datetime,
+        end: datetime,
+        healthy_states: tuple[str, ...] = ("CONNECTED",),
+    ) -> datetime | None:
+        """Return the start of the healthy suffix ending at ``end``.
+
+        This does not turn a reconnect into historical coverage: callers must
+        round the returned instant forward to the next complete interval.
+        """
+        if start.tzinfo is None or end.tzinfo is None or end <= start:
+            raise ValueError("Coverage interval must be aware and increasing")
+        start_text = start.astimezone(UTC).isoformat()
+        end_text = end.astimezone(UTC).isoformat()
+        placeholders = ",".join("?" for _ in healthy_states)
+        with self._conn() as conn:
+            latest = conn.execute(
+                "SELECT state FROM source_status_events WHERE source=? AND occurred_at_utc<=? "
+                "ORDER BY occurred_at_utc DESC, event_id DESC LIMIT 1",
+                (source, end_text),
+            ).fetchone()
+            if latest is None or latest[0] not in healthy_states:
+                return None
+            unhealthy = conn.execute(
+                f"SELECT occurred_at_utc FROM source_status_events WHERE source=? "
+                f"AND occurred_at_utc<? AND state NOT IN ({placeholders}) "
+                "ORDER BY occurred_at_utc DESC, event_id DESC LIMIT 1",
+                (source, end_text, *healthy_states),
+            ).fetchone()
+            if unhealthy is None or unhealthy[0] < start_text:
+                state_at_start = conn.execute(
+                    "SELECT state FROM source_status_events WHERE source=? AND occurred_at_utc<=? "
+                    "ORDER BY occurred_at_utc DESC, event_id DESC LIMIT 1",
+                    (source, start_text),
+                ).fetchone()
+                if state_at_start is not None and state_at_start[0] in healthy_states:
+                    return start.astimezone(UTC)
+                lower_bound = start_text
+            else:
+                lower_bound = unhealthy[0]
+            recovered = conn.execute(
+                f"SELECT occurred_at_utc FROM source_status_events WHERE source=? "
+                f"AND occurred_at_utc>? AND occurred_at_utc<=? "
+                f"AND state IN ({placeholders}) "
+                "ORDER BY occurred_at_utc, event_id LIMIT 1",
+                (source, lower_bound, end_text, *healthy_states),
+            ).fetchone()
+        return datetime.fromisoformat(recovered[0]) if recovered is not None else None
 
     def reserve_ai_calls(self, n: int, limit: int) -> bool:
         """Atomic across worker restarts; reservations count even failed attempts."""
@@ -1602,6 +1715,9 @@ class Store:
                 json.loads(result["assessment"]) if result["assessment"] else None
             )
             result["metadata"] = json.loads(result["metadata"])
+            started = datetime.fromisoformat(result["started_at_utc"])
+            completed = datetime.fromisoformat(result["completed_at_utc"])
+            result["latency_ms"] = max(0, round((completed - started).total_seconds() * 1000))
         return results
 
     @staticmethod

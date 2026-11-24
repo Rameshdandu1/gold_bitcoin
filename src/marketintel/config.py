@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     paper_database_path: Path = Path("data/paper.sqlite3")
     data_max_age_seconds: int = Field(default=180, ge=15, le=3600)
     delta_book_max_age_seconds: float = Field(default=10, ge=1, le=120)
+    delta_persistence_queue_size: int = Field(default=8192, ge=256, le=100_000)
+    delta_persistence_batch_size: int = Field(default=256, ge=16, le=2000)
     delta_discovery_refresh_seconds: int = Field(default=300, ge=30, le=3600)
     delta_discovery_max_age_seconds: int = Field(default=900, ge=30, le=86400)
     delta_reconciliation_max_age_seconds: int = Field(default=180, ge=15, le=3600)

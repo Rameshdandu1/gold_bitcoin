@@ -1,5 +1,22 @@
 # Implementation backlog (technical work order)
 
+## 2026-11-24 operator observability completion
+
+Completed in `feature/live-market-intelligence-completion`:
+
+- merged and verified PR #19 at tested head `9949856969ed36915251ca448bb28a556ce33ee7`;
+- added bounded ordered WebSocket persistence and post-durability book checkpoints;
+- reconciled complete healthy post-reconnect candle suffixes without bypassing integrity checks;
+- added authenticated candle and secret-safe settings APIs;
+- added `1m`/`5m`/`15m`/`1h` candlestick charts and factual daily statistics;
+- added Order Flow, AI Consensus, Settings, and System Health pages;
+- added backend regression/integration tests and Playwright browser coverage.
+
+Remaining operational gates are a longer live collection soak, separate authorization for any
+Anthropic retry, CoinGlass entitlement verification, external-notification authorization, and prospective
+paper observation. Paid calls, external messages, account access, and orders are outside this
+change and remain disabled.
+
 ## Phase 0 — repository and safe defaults (starter)
 - [x] README, DESIGN, AGENTS, prompts, Windows instructions, secrets hygiene
 - [x] Basic data contracts, independent AI consensus, fail-closed defaults

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from marketintel.api import create_app
 from marketintel.config import Settings
 from marketintel.delta import parse_trade_message
-from marketintel.models import CandidateSignal, SignalState
+from marketintel.models import CandidateSignal, Candle, SignalState
 from marketintel.operator_market import operator_overview
 from marketintel.quantitative import lifecycle_event
 from marketintel.storage import Store
@@ -53,6 +53,7 @@ def test_overview_protected_and_empty_does_not_invent_prices(tmp_path):
     assert all(row["price"] is None and row["state"] == "OFF" for row in result["markets"])
     assert all(not row["evaluation_fresh"] for row in result["engines"])
     assert result["ai_enabled"] is False
+    assert "0007_operator_observability" in store.migration_ids()
 
 
 def test_observed_price_and_engine_reason_then_staleness(tmp_path):
@@ -125,3 +126,102 @@ def test_history_filters_before_limit_and_validates_parameters(tmp_path):
     assert rows.json()[0]["candidate"]["candidate_id"] == "operator-fixture-candidate-0"
     assert client.get("/api/candidates?asset=UNKNOWN", auth=auth).status_code == 422
     assert client.get("/api/candidates?horizon_minutes=7", auth=auth).status_code == 422
+
+
+def test_candle_endpoint_returns_factual_series_daily_stats_and_resampled_hours(tmp_path):
+    settings = settings_for(tmp_path)
+    store = Store(settings.database_path)
+    available = datetime(2026, 11, 24, 2, 0, tzinfo=UTC)
+    previous_close_time = datetime(2026, 11, 23, 23, 59, tzinfo=UTC)
+    current_open = datetime(2026, 11, 24, 0, 0, tzinfo=UTC)
+    candles = [
+        Candle(
+            symbol="XAUTUSD",
+            resolution="1m",
+            open_time=previous_close_time,
+            open=99,
+            high=101,
+            low=98,
+            close=100,
+            volume_contracts=2,
+            source="TEST_FIXTURE_NOT_LIVE",
+            available_at_utc=available,
+        )
+    ]
+    candles.extend(
+        Candle(
+            symbol="XAUTUSD",
+            resolution="1m",
+            open_time=current_open + timedelta(minutes=index),
+            open=100 + index,
+            high=102 + index,
+            low=99 + index,
+            close=101 + index,
+            volume_contracts=1,
+            source="TEST_FIXTURE_NOT_LIVE",
+            available_at_utc=available,
+        )
+        for index in range(60)
+    )
+    store.journal_rest_candles(
+        source="TEST_FIXTURE_NOT_LIVE",
+        symbol="XAUTUSD",
+        resolution="1m",
+        request_start=previous_close_time,
+        request_end=available,
+        response_available_at=available,
+        candles=candles,
+    )
+    client = TestClient(create_app(settings, store))
+    auth = ("operator", "test-only-password")
+
+    one_minute = client.get("/api/market/candles?asset=GOLD&resolution=1m&limit=100", auth=auth)
+    assert one_minute.status_code == 200
+    payload = one_minute.json()
+    assert payload["symbol"] == "XAUTUSD"
+    assert payload["data_state"] == "AVAILABLE"
+    assert len(payload["candles"]) == 61
+    assert payload["daily"]["open"] == 100
+    assert payload["daily"]["previous_close"] == 100
+    assert payload["daily"]["high"] == 161
+    assert payload["daily"]["low"] == 99
+    assert payload["daily"]["change"] == 60
+    assert payload["daily"]["change_percent"] == 60
+
+    hourly = client.get("/api/market/candles?asset=GOLD&resolution=1h&limit=10", auth=auth)
+    assert hourly.status_code == 200
+    assert len(hourly.json()["candles"]) == 1
+    assert datetime.fromisoformat(hourly.json()["candles"][0]["open_time"]) == current_open
+
+
+def test_candle_endpoint_reports_unavailable_instead_of_inventing_data(tmp_path):
+    settings = settings_for(tmp_path)
+    client = TestClient(create_app(settings, Store(settings.database_path)))
+    response = client.get(
+        "/api/market/candles?asset=BTC&resolution=15m", auth=("operator", "test-only-password")
+    )
+    assert response.status_code == 200
+    assert response.json()["data_state"] == "UNAVAILABLE"
+    assert response.json()["candles"] == []
+    assert response.json()["daily"]["open"] is None
+
+
+def test_operator_settings_endpoint_is_safe_and_slack_is_optional(tmp_path):
+    settings = settings_for(tmp_path).model_copy(
+        update={
+            "openai_api_key": "must-not-leak",
+            "anthropic_api_key": "must-not-leak",
+            "openai_model": "gpt-fixture",
+            "anthropic_model": "claude-fixture",
+            "alerts_enabled": False,
+        }
+    )
+    client = TestClient(create_app(settings, Store(settings.database_path)))
+    response = client.get("/api/operator/settings", auth=("operator", "test-only-password"))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["models"] == {"openai": "gpt-fixture", "anthropic": "claude-fixture"}
+    assert payload["features"]["alerts_enabled"] is False
+    assert payload["features"]["trading_enabled"] is False
+    assert payload["notifications"]["dashboard_only_supported"] is True
+    assert "must-not-leak" not in response.text

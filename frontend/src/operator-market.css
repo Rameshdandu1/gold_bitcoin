@@ -25,5 +25,51 @@
 .op-pagination button,.operator-market select{background:#1b2c42;border:1px solid #425a76;border-radius:6px;padding:6px 9px;color:#e5edf9}
 .op-pagination button:disabled{opacity:.45;cursor:default}
 .op-review{margin:10px 0}
+.chart-panel{min-height:0;padding:20px;margin-bottom:28px}
+.timeframe-tabs button{padding:7px 12px}
+.daily-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:18px 0}
+.daily-stats>div{background:#17253a;border:1px solid #2b405d;border-radius:9px;padding:10px;min-width:0}
+.daily-stats span{display:block;color:#8194ae;font-size:10px;text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px}
+.daily-stats strong{font-size:13px;overflow-wrap:anywhere}
+.chart-wrap{border:1px solid #273b56;border-radius:12px;background:#0c1626;padding:8px 8px 4px;overflow:hidden;margin-bottom:10px}
+.chart-wrap svg{display:block;width:100%;min-height:260px}
+.chart-grid-line{stroke:#22334a;stroke-width:1}
+.chart-axis-label{fill:#8194ae;font-size:10px}
+.chart-last-label{text-anchor:end}
+.candle-up line,.candle-up rect{stroke:#43d39e;fill:#24785e}
+.candle-down line,.candle-down rect{stroke:#f07882;fill:#8e3d4a}
+.candle-up line,.candle-down line{stroke-width:1.2}
+.chart-caption{display:flex;justify-content:space-between;gap:12px;color:#8194ae;font-size:10px;padding:2px 8px 6px}
+.chart-unavailable,.unavailable-panel{min-height:180px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:#91a6c1}
+.chart-unavailable p,.unavailable-panel p{max-width:520px;font-size:12px;line-height:1.6}
+.operator-page{min-height:620px}
+.page-toolbar{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:22px}
+.page-toolbar h2{font-size:22px;margin-top:6px}
+.compact-tabs{min-width:210px}
+.operator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0}
+.evidence-panel{min-height:0;padding:20px;overflow-wrap:anywhere}
+.stats-cards{margin:18px 0}
+.stat-card{min-height:170px}
+.text-metric{font-size:20px;overflow-wrap:anywhere}
+.facts{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.4fr);gap:0;margin:14px 0;font-size:12px}
+.facts dt,.facts dd,.fact-row{padding:8px 0;border-bottom:1px solid #26374e}
+.facts dt{color:#91a6c1}
+.facts dd{margin:0;text-align:right;color:#e2ecfa;overflow-wrap:anywhere}
+.fact-row{display:contents}
+.assessment{margin-top:14px;border-top:1px solid #26374e;padding-top:14px}
+.assessment p{font-size:12px;line-height:1.55}
+.warn-text{color:#eac078}
+.candidate-summary{margin:18px 0}
+.health-ready{background:#123d31;color:#61ddb0}
+.health-degraded{background:#432f27;color:#f3c17a}
+.health-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:16px}
+.health-check{display:flex;align-items:center;gap:9px;background:#17253a;border:1px solid #293d57;border-radius:9px;padding:10px;min-width:0}
+.health-check strong,.health-check small{display:block;font-size:11px;overflow-wrap:anywhere}
+.health-check small{color:#91a6c1;margin-top:3px}
+.dot-amber{display:inline-block;width:8px;height:8px;border-radius:50%;background:#e0a34d;flex:0 0 auto}
+.source-table{margin-top:12px;max-height:520px;overflow:auto}
+.source-table>div{display:grid;grid-template-columns:1.2fr .65fr 2fr 1fr;gap:10px;padding:10px 0;border-bottom:1px solid #26374e;align-items:start;font-size:11px}
+.source-table strong{color:#e2ecfa}.source-table span{color:#91a6c1;overflow-wrap:anywhere}
 @media(max-width:1050px){.op-flow-grid{grid-template-columns:1fr}}
-@media(max-width:820px){.op-price-grid,.op-two{grid-template-columns:1fr}}
+@media(max-width:1050px){.daily-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.health-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.source-table>div{grid-template-columns:1fr 1fr}.operator-grid{grid-template-columns:1fr}}
+@media(max-width:820px){.op-price-grid,.op-two{grid-template-columns:1fr}.daily-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.page-toolbar{align-items:flex-start;flex-direction:column}.chart-caption{flex-direction:column}.health-grid{grid-template-columns:1fr}}

@@ -97,6 +97,103 @@ async def test_public_stream_persists_once_and_archives_connection_transitions(
 
 
 @pytest.mark.asyncio
+async def test_public_stream_batches_persistence_without_blocking_each_received_frame(
+    tmp_path, monkeypatch
+):
+    events = [
+        trade_event(datetime.now(UTC) + timedelta(microseconds=index), str(100 + index))
+        for index in range(24)
+    ]
+
+    class FakeStream:
+        def __init__(self, _url, _symbols, *, status_callback, **_kwargs):
+            self.status_callback = status_callback
+            self.last_seen_utc = events[-1].received_at_utc
+            self.books = {}
+
+        async def messages(self):
+            self.status_callback("CONNECTING", "fixture connect")
+            self.status_callback("CONNECTED", "fixture event")
+            for event in events:
+                yield event
+
+        def book_quality(self, _symbol, *, now=None):
+            return False, "snapshot_required"
+
+        def mark_stale(self, detail):
+            self.status_callback("STALE", detail)
+
+    monkeypatch.setattr("marketintel.worker.DeltaPublicStream", FakeStream)
+    store = Store(tmp_path / "market.sqlite3")
+    batch_sizes: list[int] = []
+    original_batch = store.append_raw_events
+
+    def forbid_single_event_writes(_event):
+        raise AssertionError("the receive loop must not synchronously persist one frame at a time")
+
+    def observe_batch(events_to_store):
+        batch_sizes.append(len(events_to_store))
+        return original_batch(events_to_store)
+
+    monkeypatch.setattr(store, "append_raw_event", forbid_single_event_writes)
+    monkeypatch.setattr(store, "append_raw_events", observe_batch)
+    settings = Settings(database_path=tmp_path / "market.sqlite3")
+
+    await public_market_stream(settings, store, ["BTCUSD"])
+
+    assert len(store.raw_events(symbol="BTCUSD")) == len(events)
+    assert max(batch_sizes) > 1
+
+
+@pytest.mark.asyncio
+async def test_book_monitor_uses_each_symbols_current_observation_clock(tmp_path, monkeypatch):
+    """A frame received while the previous symbol persists is not future evidence."""
+    stream_holder = {}
+
+    class FakeStream:
+        def __init__(self, _url, _symbols, *, status_callback, **_kwargs):
+            self.status_callback = status_callback
+            self.last_seen_utc = datetime.now(UTC)
+            self.xaut_received_at = self.last_seen_utc
+            self.books = {}
+            stream_holder["stream"] = self
+
+        async def messages(self):
+            self.status_callback("CONNECTED", "fixture event")
+            await asyncio.sleep(0.7)
+            if False:
+                yield trade_event(self.last_seen_utc)
+
+        def book_quality(self, symbol, *, now=None):
+            if symbol == "BTCUSD":
+                return False, "snapshot_required"
+            if now < self.xaut_received_at:
+                return False, "received_after_evaluation_clock"
+            return True, "valid"
+
+        def mark_stale(self, detail):
+            self.status_callback("STALE", detail)
+
+    monkeypatch.setattr("marketintel.worker.DeltaPublicStream", FakeStream)
+    store = Store(tmp_path / "market.sqlite3")
+    original_status = store.record_source_status
+
+    def record_status(source, state, detail="", **kwargs):
+        if source == "delta_book:BTCUSD":
+            stream_holder["stream"].xaut_received_at = datetime.now(UTC)
+        return original_status(source, state, detail, **kwargs)
+
+    monkeypatch.setattr(store, "record_source_status", record_status)
+    settings = Settings(database_path=tmp_path / "market.sqlite3", delta_book_max_age_seconds=1)
+
+    await public_market_stream(settings, store, ["BTCUSD", "XAUTUSD"])
+
+    xaut = store.source_status_history("delta_book:XAUTUSD")
+    assert xaut[-1]["state"] == "VALID"
+    assert xaut[-1]["detail"] == "valid"
+
+
+@pytest.mark.asyncio
 async def test_worker_reconciles_closed_trade_candle_and_persists_valid_status(
     tmp_path, monkeypatch
 ):
@@ -144,6 +241,77 @@ async def test_worker_reconciles_closed_trade_candle_and_persists_valid_status(
     assert history[-1]["state"] == "VALID"
     assert "matched=1" in history[-1]["detail"]
     assert store.source_status_history("delta_rest:BTCUSD:1m")[-1]["state"] == "AVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_uses_complete_contiguous_suffix_after_reconnect(
+    tmp_path, monkeypatch
+):
+    now = datetime.now(UTC).replace(second=20, microsecond=0)
+    early_open = now.replace(second=0) - timedelta(minutes=4)
+    late_open = early_open + timedelta(minutes=2)
+    store = Store(tmp_path / "market.sqlite3")
+    store.record_source_status(
+        "delta_websocket",
+        "CONNECTED",
+        "initial fixture connection",
+        occurred_at=early_open - timedelta(seconds=1),
+    )
+    store.record_source_status(
+        "delta_websocket",
+        "DISCONNECTED",
+        "fixture reconnect boundary",
+        occurred_at=early_open + timedelta(seconds=30),
+    )
+    store.record_source_status(
+        "delta_websocket",
+        "CONNECTED",
+        "fixture recovered",
+        occurred_at=early_open + timedelta(seconds=45),
+    )
+    store.append_raw_events(
+        [
+            trade_event(early_open + timedelta(seconds=5)),
+            trade_event(late_open + timedelta(seconds=5)),
+        ]
+    )
+    candles = [
+        Candle(
+            symbol="BTCUSD",
+            resolution="1m",
+            open_time=open_time,
+            open=100,
+            high=100,
+            low=100,
+            close=100,
+            volume_contracts=1,
+        )
+        for open_time in (early_open, late_open)
+    ]
+
+    class FakeREST:
+        def __init__(self, _url):
+            pass
+
+        async def historical_candles(self, *_args, **_kwargs):
+            return candles
+
+    async def stop_after_iteration(_delay):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("marketintel.worker.DeltaREST", FakeREST)
+    monkeypatch.setattr("marketintel.worker.ENGINE_CONFIGS", (EngineConfig("BTC", "1m", 30),))
+    monkeypatch.setattr("marketintel.worker.asyncio.sleep", stop_after_iteration)
+
+    with pytest.raises(asyncio.CancelledError):
+        await poll_closed_candles(
+            Settings(database_path=tmp_path / "market.sqlite3"), store, {"BTC": "BTCUSD"}
+        )
+
+    status = store.source_status_history("candle_reconciliation:BTCUSD")[-1]
+    assert status["state"] == "VALID"
+    assert "matched=1" in status["detail"]
+    assert f"coverage_start={late_open.isoformat()}" in status["detail"]
 
 
 @pytest.mark.asyncio
