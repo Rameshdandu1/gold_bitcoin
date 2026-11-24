@@ -86,6 +86,18 @@ def _openai_refusal(response: object) -> bool:
     return False
 
 
+def _anthropic_parsed_assessment(response: object) -> tuple[AnalystAssessmentV2 | None, str | None]:
+    """Parse provider JSON without allowing a semantic error to discard usage metadata."""
+    for content in getattr(response, "content", ()) or ():
+        if getattr(content, "type", None) != "text":
+            continue
+        try:
+            return AnalystAssessmentV2.model_validate_json(str(getattr(content, "text", ""))), None
+        except Exception as exc:
+            return None, type(exc).__name__
+    return None, "MISSING_TEXT_BLOCK"
+
+
 class OpenAIResponsesTransport:
     async def __call__(
         self,
@@ -152,7 +164,7 @@ class AnthropicMessagesTransport:
 
         client = AsyncAnthropic(api_key=api_key, timeout=timeout_seconds, max_retries=0)
         try:
-            response = await client.messages.parse(
+            response = await client.messages.create(
                 model=model,
                 max_tokens=max_output_tokens,
                 system=SYSTEM_PROMPT_V2,
@@ -162,7 +174,12 @@ class AnthropicMessagesTransport:
                         "content": "REQUEST_WRAPPER=" + request_bytes.decode("utf-8"),
                     }
                 ],
-                output_format=AnalystAssessmentV2,
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": AnalystAssessmentV2.model_json_schema(),
+                    }
+                },
                 timeout=timeout_seconds,
             )
             usage_value = getattr(response, "usage", None)
@@ -175,8 +192,12 @@ class AnthropicMessagesTransport:
                 ),
             )
             stop_reason = str(getattr(response, "stop_reason", ""))
+            parsed, parse_error = _anthropic_parsed_assessment(response)
+            metadata = [("sdk", anthropic.__version__)]
+            if parse_error:
+                metadata.append(("parse_error", parse_error))
             return TransportReply(
-                parsed=getattr(response, "parsed_output", None),
+                parsed=parsed,
                 returned_model=str(getattr(response, "model", "")) or None,
                 response_id=str(getattr(response, "id", "")) or None,
                 request_id=str(getattr(response, "_request_id", "")) or None,
@@ -184,7 +205,7 @@ class AnthropicMessagesTransport:
                 usage=usage,
                 refusal=stop_reason == "refusal",
                 truncated=stop_reason == "max_tokens",
-                metadata=(("sdk", anthropic.__version__),),
+                metadata=tuple(metadata),
             )
         finally:
             await client.close()

@@ -25,8 +25,16 @@ notepad .env
 
 Set unique `OPERATOR_USERNAME`/`OPERATOR_PASSWORD`. Leave ingestion, AI and alerts false initially.
 AI additionally requires two explicit model IDs/keys, verified non-zero pricing and spend caps,
-fee/slippage assumptions and Slack destination/token. Credentials alone are not permission for a
-paid smoke test. The project contains no exchange key or order setting.
+and fee/slippage assumptions. Slack is optional for dashboard-only operation and remains a separate
+alert readiness gate. Credentials alone are not permission for a paid smoke test. The project
+contains no exchange key or order setting.
+
+After explicit request/cost authorization, the bounded smoke command reserves the daily ledger
+before making at most one call per provider:
+
+```powershell
+.\.venv\Scripts\python.exe -m marketintel.provider_smoke --authorize-paid-smoke --output data\operational\provider-smoke.json
+```
 
 ## 2. Manual staged startup
 
@@ -49,7 +57,8 @@ $env:OPERATOR_PASSWORD = Read-Host 'Operator password'
 ```
 
 `/healthz` proves only that the API process runs. `/readyz` separately reports migrations, auth,
-market-worker heartbeat/source age, provider/alert configuration, queue leases and UTC-day budget.
+market-worker heartbeat, current discovery/WebSocket/book/reconciliation health, provider/alert
+configuration, queue leases and UTC-day budget.
 It never calls a paid provider.
 
 ## 3. HTTPS and browser access

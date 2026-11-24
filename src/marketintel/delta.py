@@ -510,15 +510,22 @@ class DeltaPublicStream:
         *,
         book_max_age_seconds: float = 10.0,
         status_callback: Callable[[str, str], None] | None = None,
+        status_heartbeat_seconds: float = 5.0,
+        clock: Callable[[], datetime] | None = None,
     ):
         if window < 1:
             raise ValueError("Trade window must be positive")
+        if status_heartbeat_seconds <= 0:
+            raise ValueError("Status heartbeat interval must be positive")
         self.url = url
         self.symbols = list(dict.fromkeys(symbols))
         self.window = window
         self.book_max_age_seconds = book_max_age_seconds
         self.status_callback = status_callback
+        self.status_heartbeat_seconds = status_heartbeat_seconds
+        self.clock = clock or (lambda: datetime.now(UTC))
         self._last_connection_status: tuple[str, str] | None = None
+        self._last_status_heartbeat_utc: datetime | None = None
         self.trades: dict[str, dict[str, TradeRecord]] = defaultdict(dict)
         self.trade_order: dict[str, list[tuple[datetime, str]]] = defaultdict(list)
         self.books = {
@@ -529,9 +536,16 @@ class DeltaPublicStream:
 
     def _notify_connection_status(self, state: str, detail: str) -> None:
         status = (state, detail)
-        if status == self._last_connection_status:
+        now = self.clock()
+        if (
+            status == self._last_connection_status
+            and self._last_status_heartbeat_utc is not None
+            and (now - self._last_status_heartbeat_utc).total_seconds()
+            < self.status_heartbeat_seconds
+        ):
             return
         self._last_connection_status = status
+        self._last_status_heartbeat_utc = now
         if self.status_callback is not None:
             self.status_callback(state, detail)
 
@@ -648,7 +662,13 @@ class DeltaPublicStream:
                             )
                         yield event
                         if not book_valid:
-                            raise DeltaStreamResyncRequired(self.books[event.symbol].reason)
+                            age_seconds = (
+                                event.received_at_utc - event.event_time_utc
+                            ).total_seconds()
+                            raise DeltaStreamResyncRequired(
+                                f"{self.books[event.symbol].reason};symbol={event.symbol};"
+                                f"event_age_seconds={age_seconds:.3f}"
+                            )
                         if self.books and all(book.valid for book in self.books.values()):
                             backoff = 1.0
             except asyncio.CancelledError:
@@ -662,10 +682,12 @@ class DeltaPublicStream:
                 websockets.exceptions.WebSocketException,
             ) as exc:
                 disconnect_detail = type(exc).__name__
+                if isinstance(exc, DeltaDataIntegrityError):
+                    disconnect_detail = f"{type(exc).__name__}:{str(exc)[:120]}"
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
                 if status_code == 429:
                     backoff = max(backoff, 300.0)
-                LOGGER.warning("Delta public stream disconnected: %s", type(exc).__name__)
+                LOGGER.warning("Delta public stream disconnected: %s", disconnect_detail)
             self.invalidate_books("fresh_snapshot_required_after_disconnect")
             self._notify_connection_status("DISCONNECTED", disconnect_detail)
             jitter = random.uniform(0, min(backoff * 0.2, 5.0))

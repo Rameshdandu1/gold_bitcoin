@@ -63,3 +63,16 @@ There is deliberately no generic “enable everything” command. Before each De
 provider, or Slack check, fill the worksheet duration/request/token/cost/message ceiling and the
 specific authorization. A missing credential, entitlement, licensed gold source, destination host,
 or notification approval is `BLOCKED` for that row, not permission to substitute data.
+
+## Explicitly authorized provider smoke
+
+Only after recording official model IDs/rates, a non-zero combined cap and one-call provider /
+two-call total ceilings, run:
+
+```powershell
+.\.venv\Scripts\python.exe -m marketintel.provider_smoke --authorize-paid-smoke --output data\operational\provider-smoke.json
+```
+
+The command uses one synthetic payload labelled as not a market signal, sends its identical digest
+independently, reserves budget before dispatch, and records safe references plus usage. A failure or
+usage-unknown result keeps dual confirmation disabled; do not retry without new authorization.
