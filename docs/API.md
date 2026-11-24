@@ -12,7 +12,8 @@ authentication only over a trusted loopback connection, VPN, or an HTTPS reverse
 | `GET /readyz` | authenticated configuration, migration, heartbeat, source, queue and budget gates; makes no provider call |
 | `GET /api/health` | UTC response time, flags, source transitions/heartbeats, queue and spend state |
 | `GET /api/engines` | six engine descriptors and last durable state |
-| `GET /api/candidates?limit=50&offset=0` | bounded active revisions, current lifecycle, review run/attempt metadata and historical consensus |
+| `GET /api/market/overview` | bounded local last-trade prices, discovery, book, reconciliation, recorded FAST features, six engines, source diagnostics, configuration booleans and budget/queue summary; no external calls |
+| `GET /api/candidates?asset=GOLD&horizon_minutes=60&limit=50&offset=0` | optional asset (GOLD/BTC) and horizon (30/60/240) filters applied before pagination; active revisions and historical review metadata |
 | `GET /api/candidates/{id}/lifecycle?limit=100&offset=0` | append-only state events |
 | `GET /api/candidates/{id}/revisions?limit=100&offset=0` | immutable revisions |
 | `GET /api/candidates/{id}/assessments` | legacy Phase 2 records, never an authorization source |

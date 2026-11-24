@@ -210,6 +210,16 @@ The six finite contracts are implemented within the existing phase without a new
 provider feature. Proceed to controlled operational/evidence validation only with the worksheet,
 bounded authorization and actual prerequisites.
 
+## Operator usability and observability
+
+- [ ] Validate first dashboard slice in CI and on the destination Windows host: source-specific
+  health, last executed prices, engine reason/time, recorded proposal, FAST flow snapshot, budget,
+  integration configuration, source heartbeats, and asset/horizon-filtered history.
+- [ ] Add complete UTC/session OHLC and chart coverage; dedicated current order-flow and settings
+  views; independent provider rationale; actual Claude validation fix and authorized smoke checks.
+- [ ] Review canonical readiness and Slack dependency separately without weakening risk gates.
+- [ ] Measure live source continuity, order-flow warmup, reconciliation, and paper results.
+
 ## Next operational stage — controlled Windows and live integration validation
 
 Detailed next-stage instructions: [CODEX_OPERATIONAL_VALIDATION.md](../prompts/CODEX_OPERATIONAL_VALIDATION.md).

@@ -52,6 +52,8 @@ class Store:
                     horizon_minutes INTEGER NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS candidates_asset_horizon_time
+                    ON candidates (asset, horizon_minutes, created_at, candidate_id);
                 CREATE TABLE IF NOT EXISTS candidate_revisions (
                     candidate_id TEXT NOT NULL,
                     snapshot_id TEXT NOT NULL,
@@ -72,6 +74,8 @@ class Store:
                     engine TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS feature_snapshots_engine_symbol_time
+                    ON feature_snapshots (engine, symbol, observed_at_utc, snapshot_id);
                 CREATE TRIGGER IF NOT EXISTS feature_snapshots_no_update
                     BEFORE UPDATE ON feature_snapshots
                     BEGIN SELECT RAISE(ABORT, 'feature_snapshots is append-only'); END;
@@ -2559,10 +2563,41 @@ class Store:
             dict(zip(("service", "updated_at", "state", "detail"), r, strict=True)) for r in rows
         ]
 
-    def recent_candidates(self, limit: int = 50, offset: int = 0) -> list[dict]:
+    def latest_feature_snapshot(
+        self, engine: str, symbol: str, *, through: datetime
+    ) -> FeatureSnapshot | None:
+        """Latest persisted evidence, not a newly calculated signal."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM feature_snapshots "
+                "WHERE engine=? AND symbol=? AND observed_at_utc<=? "
+                "ORDER BY observed_at_utc DESC, snapshot_id DESC LIMIT 1",
+                (engine, symbol, through.astimezone(UTC).isoformat()),
+            ).fetchone()
+        return FeatureSnapshot.model_validate_json(row[0]) if row else None
+
+    def recent_candidates(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        *,
+        asset: str | None = None,
+        horizon_minutes: int | None = None,
+    ) -> list[dict]:
+        """Filter before pagination; values are bound SQL parameters."""
+        clauses = []
+        parameters: list[object] = []
+        if asset is not None:
+            clauses.append("c.asset=?")
+            parameters.append(asset)
+        if horizon_minutes is not None:
+            clauses.append("c.horizon_minutes=?")
+            parameters.append(horizon_minutes)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        parameters.extend((min(max(limit, 1), 200), max(offset, 0)))
         with self._conn() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT r.payload, a.revision_id,
                 (
                     SELECT d2.payload FROM consensus_decisions_v2 d2
@@ -2587,9 +2622,10 @@ class Store:
                 FROM candidates c
                 JOIN active_candidate_revisions a ON a.candidate_id=c.candidate_id
                 JOIN candidate_revision_identities r ON r.revision_id=a.revision_id
-                ORDER BY c.created_at DESC LIMIT ? OFFSET ?
+                {where}
+                ORDER BY c.created_at DESC, c.candidate_id DESC LIMIT ? OFFSET ?
             """,
-                (min(max(limit, 1), 200), max(offset, 0)),
+                parameters,
             ).fetchall()
         output = [
             {
