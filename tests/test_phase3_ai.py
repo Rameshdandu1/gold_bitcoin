@@ -142,6 +142,7 @@ async def test_both_providers_receive_same_bytes_and_execute_concurrently():
     analysis = analysis_fixture()
     assessment = valid_assessment(analysis)
     settings = Settings(
+        _env_file=None,
         ai_enabled=True,
         openai_api_key="fixture-key",
         anthropic_api_key="fixture-key",
@@ -162,11 +163,13 @@ async def test_both_providers_receive_same_bytes_and_execute_concurrently():
 
     openai_transport = ConcurrentTransport(assessment, model="fixture-openai")
     anthropic_transport = ConcurrentTransport(assessment, model="fixture-anthropic")
+    gpt = GPTAnalyst(settings, openai_transport)
+    claude = ClaudeAnalyst(settings, anthropic_transport)
     deadline = datetime.now(UTC) + timedelta(seconds=5)
     gpt_result, claude_result = await independent_review_v2(
         analysis,
-        GPTAnalyst(settings, openai_transport),
-        ClaudeAnalyst(settings, anthropic_transport),
+        gpt,
+        claude,
         deadline_at=deadline,
     )
 
