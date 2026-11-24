@@ -1,5 +1,23 @@
 # Dual AI Market Intelligence — Gold + Bitcoin
 
+## Operator observability — first dashboard slice
+
+The authenticated `/api/market/overview` endpoint reads only locally persisted Delta evidence.
+It exposes the latest recorded executed trade for each discovered market (or explicitly unverified
+configured preference), price/source timestamps, current book eligibility, reconciliation reasons,
+six engine evaluations, and recorded FAST flow snapshots. It is **not** a new authorization
+or live trading endpoint. A healthy market badge means its listed local checks passed, not
+that a signal is profitable or eligible. Candidate history supports server-side asset/horizon
+filtering before pagination. The market view polls independently of the research view.
+No API keys, real requests, or changes to existing enabled flags are made by the dashboard.
+
+Still pending: daily open/previous close/high/low and charts with validated session coverage;
+dedicated order-flow and settings pages; detailed independent analyst rationale and provider
+smoke-test resolution; reconciliation and WebSocket live soak; CoinGlass heatmap entitlement;
+dashboard-only consensus decoupling from Slack; overall readiness-policy review; prospective
+paper observation and actual performance. The new view does not fix these integrations.
+
+
 ## Current status: Phase 6 offline contract corrections implemented
 
 The [independent workflow-acceptance review](docs/audits/phase-6-workflow-acceptance-independent-review.md)

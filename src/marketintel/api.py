@@ -7,6 +7,7 @@ import binascii
 import secrets
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from marketintel.config import Settings
 from marketintel.detectors import describe_engines
+from marketintel.operator_market import operator_overview
 from marketintel.research_storage import PaperLedger, ResearchStore
 from marketintel.storage import Store
 
@@ -175,9 +177,22 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def engines() -> list[dict]:
         return store.last_engine_states(describe_engines(settings.gold_symbol, settings.btc_symbol))
 
+    @app.get("/api/market/overview")
+    def market_overview() -> dict:
+        return operator_overview(store, settings, now=datetime.now(UTC))
+
     @app.get("/api/candidates")
-    def candidates(limit: int = 50, offset: int = 0) -> list[dict]:
-        return store.recent_candidates(limit, offset)
+    def candidates(
+        limit: int = 50,
+        offset: int = 0,
+        asset: Literal["GOLD", "BTC"] | None = None,
+        horizon_minutes: int | None = None,
+    ) -> list[dict]:
+        if horizon_minutes is not None and horizon_minutes not in (30, 60, 240):
+            raise HTTPException(status_code=422, detail="Unsupported horizon")
+        return store.recent_candidates(
+            limit, offset, asset=asset, horizon_minutes=horizon_minutes
+        )
 
     @app.get("/api/candidates/{candidate_id}/assessments")
     def assessments(candidate_id: str) -> list[dict]:

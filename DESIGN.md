@@ -129,6 +129,15 @@ fixes and remaining acceptance boundaries. Architectural requirements remain dis
 acceptance: live providers, licensed data, prospective duration and destination deployment are not
 proven by fixtures. Passing fixtures are not evidence of live provider readiness or strategy performance.
 
+## Operator read model (observability slice)
+
+The authenticated market overview uses existing local trade, book, discovery, source-status,
+engine and feature-snapshot records. Source states, timestamps and explicit stale/unavailable
+labels are separate from configuration flags and historical review decisions. It performs no
+provider calls and cannot approve signals. Independent overview/history polling prevents a
+research API failure from hiding the market view. Full live readiness and delivery eligibility
+remain separate backend policies.
+
 ## Business purpose
 Monitor Delta Exchange India gold-linked instruments (XAUT/PAXG *only if discovered as currently listed*) and BTCUSD; determine credible upcoming moves over three independent horizons: short (15–30m), medium (60m), long (120–240m). Proposed gold gross-underlying targets: $10/$20/$30; BTC targets are asset-relative percentages/ATR selected from calibrated results. Stop risk, commissions and options premiums can make an underlying move untradable.
 
