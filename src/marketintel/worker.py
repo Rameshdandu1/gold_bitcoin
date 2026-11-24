@@ -521,10 +521,9 @@ async def public_market_stream(settings: Settings, store: Store, symbols: list[s
                 stream.mark_stale("No recent validated public market event")
             for symbol in symbols:
                 quality = stream.book_quality(symbol, now=now)
-                if book_states.get(symbol) != quality:
-                    state = "VALID" if quality[0] else "INVALID"
-                    store.record_source_status(f"delta_book:{symbol}", state, quality[1])
-                    book_states[symbol] = quality
+                state = "VALID" if quality[0] else "INVALID"
+                store.record_source_status(f"delta_book:{symbol}", state, quality[1])
+                book_states[symbol] = quality
 
     monitor = asyncio.create_task(monitor_freshness())
     try:

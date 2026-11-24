@@ -366,6 +366,26 @@ async def test_stream_reconnects_and_resubscribes(monkeypatch):
     assert statuses[-1] == ("CONNECTED", "Validated public market event received")
 
 
+def test_identical_connected_status_refreshes_throttled_health_heartbeat():
+    statuses = []
+    current = [datetime(2026, 11, 24, tzinfo=UTC)]
+    stream = DeltaPublicStream(
+        "wss://example.invalid",
+        ["BTCUSD"],
+        status_callback=lambda state, detail: statuses.append((state, detail)),
+        status_heartbeat_seconds=5,
+        clock=lambda: current[0],
+    )
+
+    stream._notify_connection_status("CONNECTED", "healthy")
+    current[0] += timedelta(seconds=2)
+    stream._notify_connection_status("CONNECTED", "healthy")
+    current[0] += timedelta(seconds=4)
+    stream._notify_connection_status("CONNECTED", "healthy")
+
+    assert statuses == [("CONNECTED", "healthy"), ("CONNECTED", "healthy")]
+
+
 @pytest.mark.asyncio
 async def test_rest_rate_limit_retries_then_recovers(monkeypatch):
     calls = 0

@@ -1763,7 +1763,7 @@ class Store:
         deadline_at: datetime | None = None,
         now: datetime | None = None,
     ) -> bool:
-        """Conditionally commit a revision decision and its alert intent in one transaction."""
+        """Commit a revision decision and, when configured, its alert intent atomically."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             current = self._eligibility_token_in_transaction(conn, decision.candidate_id)
@@ -1830,9 +1830,7 @@ class Store:
                     (decision.run_id,),
                 ).fetchone()
                 return existing is not None and existing[0] == decision.model_dump_json()
-            if decision.status == "CONFIRMED":
-                if not destination_id:
-                    raise ValueError("Confirmed decision requires an alert destination identity")
+            if decision.status == "CONFIRMED" and destination_id:
                 delivery_key = hashlib.sha256(
                     (
                         f"{decision.decision_id}|{decision.candidate_revision_id}|"

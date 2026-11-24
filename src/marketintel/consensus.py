@@ -85,7 +85,7 @@ def evaluate_current_risk(
     current &= gate(
         "NOTIFICATION_CONFIGURATION",
         eligibility.notification_ready,
-        "A durable operator destination must be configured",
+        "A durable authenticated dashboard or enabled notification destination is required",
     )
     if not current:
         return CurrentRiskResult(

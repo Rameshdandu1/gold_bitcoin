@@ -27,6 +27,12 @@ used by the current quality check. Legacy jobs without complete frozen request p
 quarantined with a typed zero-call disposition.
 Migration `0006_phase6_evidence_integrity` is additive.
 
+The authenticated dashboard is itself a durable operator surface. A confirmed decision may be
+committed without an external notification intent when `ALERTS_ENABLED=false`; Slack readiness is
+evaluated independently and an outbox row is created only when alerts are explicitly enabled with
+a configured destination. Provider connectivity smoke requests use the strict adapters and durable
+UTC-day budget ledger.
+
 Research stores provider completion and availability separately. Provider evidence uses the
 authoritative envelope availability clock and rejects conflicting payload clocks. Modes,
 request/configuration digests and available provider/model provenance are retained; missing genuine

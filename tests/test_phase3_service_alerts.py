@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -20,6 +20,7 @@ from marketintel.storage import Store
 
 def authenticated_service(tmp_path):
     settings = Settings(
+        _env_file=None,
         database_path=tmp_path / "service.sqlite3",
         operator_username="operator",
         operator_password="fixture-password",
@@ -39,6 +40,68 @@ def test_operator_auth_protects_api_docs_and_readiness_but_not_liveness(tmp_path
     ready = client.get("/readyz", auth=auth)
     assert ready.status_code == 200
     assert ready.json()["ready"] is True
+
+
+def test_ai_readiness_does_not_require_optional_slack_configuration(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        database_path=tmp_path / "dashboard-only.sqlite3",
+        operator_username="operator",
+        operator_password="fixture-password",
+        ai_enabled=True,
+        openai_api_key="fixture-openai-key",
+        openai_model="fixture-openai-model",
+        anthropic_api_key="fixture-anthropic-key",
+        anthropic_model="fixture-anthropic-model",
+        openai_input_microusd_per_million_tokens=100_000,
+        openai_output_microusd_per_million_tokens=500_000,
+        anthropic_input_microusd_per_million_tokens=100_000,
+        anthropic_output_microusd_per_million_tokens=500_000,
+        ai_total_cost_limit_microusd_per_day=5_000_000,
+        risk_fee_bps="5",
+        risk_slippage_bps="5",
+        alerts_enabled=False,
+    )
+    store = Store(settings.database_path)
+    client = TestClient(create_app(settings, store))
+
+    ready = client.get("/readyz", auth=("operator", "fixture-password"))
+
+    assert ready.status_code == 200
+    assert ready.json()["checks"]["ai_configuration"] is True
+    assert ready.json()["checks"]["alert_configuration"] is True
+
+
+def test_live_readiness_requires_stream_books_and_reconciliation_not_only_discovery(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        database_path=tmp_path / "live-readiness.sqlite3",
+        operator_username="operator",
+        operator_password="fixture-password",
+        live_ingestion_enabled=True,
+    )
+    store = Store(settings.database_path)
+    now = datetime.now(UTC)
+    for source in ("worker", "product_discovery:BTC", "product_discovery:GOLD"):
+        store.record_source_status(source, "AVAILABLE", "fixture", occurred_at=now)
+    client = TestClient(create_app(settings, store))
+
+    incomplete = client.get("/readyz", auth=("operator", "fixture-password"))
+    assert incomplete.status_code == 503
+    assert incomplete.json()["checks"]["required_market_sources"] is False
+
+    for source, state in (
+        ("delta_websocket", "CONNECTED"),
+        ("delta_book:BTCUSD", "VALID"),
+        ("delta_book:XAUTUSD", "VALID"),
+        ("candle_reconciliation:BTCUSD", "VALID"),
+        ("candle_reconciliation:XAUTUSD", "VALID"),
+    ):
+        store.record_source_status(source, state, "fixture", occurred_at=now)
+
+    complete = client.get("/readyz", auth=("operator", "fixture-password"))
+    assert complete.status_code == 200
+    assert complete.json()["checks"]["required_market_sources"] is True
 
 
 def test_cors_allows_configured_origin_and_rejects_unlisted_origin(tmp_path):
@@ -105,6 +168,24 @@ def committed_alert(store):
         decision, destination_id="slack:fixture-channel"
     )
     return candidate
+
+
+def test_confirmed_dashboard_decision_does_not_require_an_alert_destination(tmp_path):
+    store = Store(tmp_path / "dashboard-decision.sqlite3")
+    candidate, analysis = analysis_fixture()
+    persist_candidate(store, candidate)
+    assert store.save_analysis_envelope(analysis)
+    decision = decide_v2(
+        analysis,
+        *approvals(analysis),
+        eligibility(store, analysis),
+        run_id="run-dashboard-only",
+        provider_attempt_ids=("gpt-dashboard", "claude-dashboard"),
+    )
+
+    assert decision.status == "CONFIRMED"
+    assert store.commit_consensus_decision_and_outbox(decision, destination_id=None)
+    assert store.outbox_items() == []
 
 
 class FakeSlack:
